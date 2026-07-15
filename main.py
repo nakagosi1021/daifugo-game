@@ -16,13 +16,13 @@ TABLE_COLOR = (30, 120, 70)
 CARD_COLOR = (250, 250, 245)
 CARD_BORDER_COLOR = (30, 30, 30)
 SHADOW_COLOR = (20, 80, 45)
-TEXT_COLOR = (255, 255, 255)
+WHITE = (255, 255, 255)
 BLACK = (25, 25, 25)
 RED = (200, 35, 35)
 
 
 def create_font(size: int, bold: bool = False) -> pygame.font.Font:
-    """日本語を表示できるWindowsのフォントを探す。"""
+    """日本語を表示できるフォントを作る。"""
     font_names = (
         "meiryo",
         "yugothic",
@@ -43,23 +43,21 @@ def create_font(size: int, bold: bool = False) -> pygame.font.Font:
 
 
 def create_hands() -> list[list[Card]]:
-    """52枚のカードを作り、4人に配る。"""
+    """トランプを作り、4人に配る。"""
     deck = Deck()
-
-    print(f"作成されたカードの枚数：{len(deck.cards)}枚")
-
     deck.shuffle()
+
     hands = deck.deal(number_of_players=4)
 
     player_names = ("あなた", "CPU1", "CPU2", "CPU3")
 
-    print("\n===== カード配布結果 =====")
+    print("===== カード配布結果 =====")
 
     for player_name, hand in zip(player_names, hands):
-        hand_text = " ".join(str(card) for card in hand)
+        cards_text = " ".join(str(card) for card in hand)
 
         print(f"\n{player_name}：{len(hand)}枚")
-        print(hand_text)
+        print(cards_text)
 
     return hands
 
@@ -71,7 +69,7 @@ def draw_text(
     color: tuple[int, int, int],
     center: tuple[int, int],
 ) -> None:
-    """文字を指定位置の中央に表示する。"""
+    """文字を指定した位置の中央に表示する。"""
     text_surface = font.render(text, True, color)
     text_rect = text_surface.get_rect(center=center)
     screen.blit(text_surface, text_rect)
@@ -84,7 +82,7 @@ def draw_card(
     y: int,
     card_font: pygame.font.Font,
 ) -> None:
-    """カード1枚を画面に描く。"""
+    """カード1枚を描画する。"""
     shadow_rect = pygame.Rect(
         x + 4,
         y + 5,
@@ -122,14 +120,14 @@ def draw_card(
     )
 
     if card.suit in ("♥", "♦"):
-        card_text_color = RED
+        text_color = RED
     else:
-        card_text_color = BLACK
+        text_color = BLACK
 
     card_text = card_font.render(
         str(card),
         True,
-        card_text_color,
+        text_color,
     )
 
     card_text_rect = card_text.get_rect(
@@ -153,49 +151,18 @@ def draw_player_hand(
     )
 
     start_x = (WINDOW_WIDTH - total_width) // 2
-    card_y = WINDOW_HEIGHT - CARD_HEIGHT - 35
+    card_y = WINDOW_HEIGHT - CARD_HEIGHT - 30
 
     for index, card in enumerate(hand):
         card_x = start_x + index * (CARD_WIDTH + CARD_GAP)
 
         draw_card(
-            screen=screen,
-            card=card,
-            x=card_x,
-            y=card_y,
-            card_font=card_font,
+            screen,
+            card,
+            card_x,
+            card_y,
+            card_font,
         )
-
-
-def draw_cpu_information(
-    screen: pygame.Surface,
-    hands: list[list[Card]],
-    info_font: pygame.font.Font,
-) -> None:
-    """CPUの残りカード枚数を表示する。"""
-    draw_text(
-        screen,
-        f"CPU1：残り{len(hands[1])}枚",
-        info_font,
-        TEXT_COLOR,
-        (WINDOW_WIDTH // 2, 100),
-    )
-
-    draw_text(
-        screen,
-        f"CPU2：残り{len(hands[2])}枚",
-        info_font,
-        TEXT_COLOR,
-        (125, WINDOW_HEIGHT // 2),
-    )
-
-    draw_text(
-        screen,
-        f"CPU3：残り{len(hands[3])}枚",
-        info_font,
-        TEXT_COLOR,
-        (WINDOW_WIDTH - 125, WINDOW_HEIGHT // 2),
-    )
 
 
 def draw_game(
@@ -212,21 +179,39 @@ def draw_game(
         screen,
         "大富豪ゲーム",
         title_font,
-        TEXT_COLOR,
+        WHITE,
         (WINDOW_WIDTH // 2, 40),
     )
 
-    draw_cpu_information(
+    draw_text(
         screen,
-        hands,
+        f"CPU1：残り{len(hands[1])}枚",
         info_font,
+        WHITE,
+        (WINDOW_WIDTH // 2, 100),
+    )
+
+    draw_text(
+        screen,
+        f"CPU2：残り{len(hands[2])}枚",
+        info_font,
+        WHITE,
+        (130, WINDOW_HEIGHT // 2),
+    )
+
+    draw_text(
+        screen,
+        f"CPU3：残り{len(hands[3])}枚",
+        info_font,
+        WHITE,
+        (WINDOW_WIDTH - 130, WINDOW_HEIGHT // 2),
     )
 
     draw_text(
         screen,
         "場：まだカードはありません",
         info_font,
-        TEXT_COLOR,
+        WHITE,
         (WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2),
     )
 
@@ -234,8 +219,8 @@ def draw_game(
         screen,
         f"あなた：残り{len(hands[0])}枚",
         info_font,
-        TEXT_COLOR,
-        (WINDOW_WIDTH // 2, 540),
+        WHITE,
+        (WINDOW_WIDTH // 2, 545),
     )
 
     draw_player_hand(
