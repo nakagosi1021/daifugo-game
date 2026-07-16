@@ -62,6 +62,7 @@ class GameState:
     turn_started_at: int
     pending_eight_cut_player: int | None
     eight_cut_display_started_at: int | None
+    revolution: bool
 
 
 def create_font(size: int, bold: bool = False) -> pygame.font.Font:
@@ -117,6 +118,7 @@ def create_new_game() -> GameState:
         turn_started_at=pygame.time.get_ticks(),
         pending_eight_cut_player=None,
         eight_cut_display_started_at=None,
+        revolution=False,
     )
 
 
@@ -296,10 +298,47 @@ def get_selected_cards(
     return [hand[index] for index in sorted(selected_indices)]
 
 
+def is_stronger(
+    candidate: Card,
+    table_card: Card,
+    revolution: bool,
+) -> bool:
+    """通常時・革命時に応じてカードの強さを比較する。"""
+    if revolution:
+        return candidate.strength < table_card.strength
+    return candidate.strength > table_card.strength
+
+
+def weak_card_sort_value(card: Card, revolution: bool) -> int:
+    """現在の強さ順で、弱いカードから並べるための値を返す。"""
+    if revolution:
+        return -card.strength
+    return card.strength
+
+
+def is_revolution(cards: list[Card]) -> bool:
+    """同じ数字のカード4枚で革命を成立させる。"""
+    return (
+        len(cards) == 4
+        and len({card.rank for card in cards}) == 1
+    )
+
+
+def activate_revolution(game: GameState) -> str:
+    """革命状態を反転し、表示メッセージを返す。"""
+    game.revolution = not game.revolution
+
+    if game.revolution:
+        return "革命！カードの強さが逆転しました（3が最強）"
+
+    return "革命返し！通常の強さに戻りました（2が最強）"
+
+
 def validate_play(
     selected_cards: list[Card],
     table_cards: list[Card],
     first_turn: bool,
+    revolution: bool,
 ) -> tuple[bool, str]:
     if not selected_cards:
         return False, "カードを選択してください"
@@ -316,7 +355,13 @@ def validate_play(
         return True, ""
     if len(selected_cards) != len(table_cards):
         return False, f"場と同じ{len(table_cards)}枚を出してください"
-    if selected_cards[0].strength <= table_cards[0].strength:
+    if not is_stronger(
+        selected_cards[0],
+        table_cards[0],
+        revolution,
+    ):
+        if revolution:
+            return False, "革命中は、場より数字の小さいカードを出してください"
         return False, "場より強いカードを出してください"
     return True, ""
 
@@ -325,26 +370,81 @@ def choose_cpu_cards(
     hand: list[Card],
     table_cards: list[Card],
     first_turn: bool,
+    revolution: bool,
 ) -> list[Card]:
+    groups: dict[str, list[Card]] = {}
+
+    for card in hand:
+        groups.setdefault(card.rank, []).append(card)
+
     if first_turn:
+        three_cards = groups.get("3", [])
+
+        if (
+            len(three_cards) == 4
+            and any(
+                card.suit == "♦"
+                for card in three_cards
+            )
+        ):
+            return three_cards.copy()
+
         for card in hand:
             if card.suit == "♦" and card.rank == "3":
                 return [card]
+
         return []
-    groups: dict[str, list[Card]] = {}
-    for card in hand:
-        groups.setdefault(card.rank, []).append(card)
+
     if not table_cards:
-        return [min(hand, key=lambda card: card.strength)]
+        # 4枚組を持っている場合、CPUも革命を起こす。
+        four_card_groups = [
+            cards
+            for cards in groups.values()
+            if len(cards) == 4
+        ]
+
+        if four_card_groups:
+            four_card_groups.sort(
+                key=lambda cards: weak_card_sort_value(
+                    cards[0],
+                    revolution,
+                )
+            )
+            return four_card_groups[0].copy()
+
+        weakest_card = min(
+            hand,
+            key=lambda card: weak_card_sort_value(
+                card,
+                revolution,
+            ),
+        )
+        return [weakest_card]
+
     required_count = len(table_cards)
-    required_strength = table_cards[0].strength
     candidate_groups: list[list[Card]] = []
+
     for cards in groups.values():
-        if len(cards) >= required_count and cards[0].strength > required_strength:
+        if (
+            len(cards) >= required_count
+            and is_stronger(
+                cards[0],
+                table_cards[0],
+                revolution,
+            )
+        ):
             candidate_groups.append(cards)
+
     if not candidate_groups:
         return []
-    candidate_groups.sort(key=lambda cards: cards[0].strength)
+
+    candidate_groups.sort(
+        key=lambda cards: weak_card_sort_value(
+            cards[0],
+            revolution,
+        )
+    )
+
     return candidate_groups[0][:required_count]
 
 
@@ -369,18 +469,27 @@ def is_eight_cut(cards: list[Card]) -> bool:
     return bool(cards) and all(card.rank == "8" for card in cards)
 
 
-def start_eight_cut_wait(game: GameState, player_index: int) -> None:
+def start_eight_cut_wait(
+    game: GameState,
+    player_index: int,
+    revolution_message: str | None = None,
+) -> None:
     """8を描画した後、一定時間表示してから場を流す準備をする。"""
     game.pending_eight_cut_player = player_index
 
-    # ここではまだ時間を開始しない。
-    # pygame.display.flip()で8が実際に描画された後に開始する。
+    # pygame.display.flip()で8が実際に描画された後に時間を開始する。
     game.eight_cut_display_started_at = None
 
     played_text = " ".join(str(card) for card in game.table_cards)
+
+    if revolution_message is None:
+        effect_text = "8切り！"
+    else:
+        effect_text = f"{revolution_message}　さらに8切り！"
+
     game.message = (
         f"{PLAYER_NAMES[player_index]}は {played_text} を出しました　"
-        "8切り！"
+        f"{effect_text}"
     )
 
 
@@ -472,13 +581,14 @@ def draw_title_screen(
     for index, card in enumerate(sample_cards):
         rect = pygame.Rect(sample_x + index * 84, 190, CARD_WIDTH, CARD_HEIGHT)
         draw_card(screen, card, rect, card_font)
-    panel_rect = pygame.Rect(220, 310, 560, 155)
+    panel_rect = pygame.Rect(205, 275, 590, 200)
     draw_panel(screen, panel_rect)
     rules = (
         "♦3を持つ人からスタート",
         "3が最弱、2が最強／同じ数字は複数枚出せます",
         "全員がパスすると場が流れます",
-        "ローカルルール：8を出すと場が流れます",
+        "8切り：8を出すと場が流れます",
+        "革命：同じ数字4枚で強さが逆転します",
     )
     for index, rule in enumerate(rules):
         draw_text(
@@ -486,7 +596,7 @@ def draw_title_screen(
             rule,
             small_font,
             WHITE,
-            (WINDOW_WIDTH // 2, 335 + index * 34),
+            (WINDOW_WIDTH // 2, 302 + index * 36),
         )
     draw_button(
         screen,
@@ -580,6 +690,7 @@ def draw_game(
     rankings: list[int],
     game_over: bool,
     eight_cut_pending: bool,
+    revolution: bool,
     title_font: pygame.font.Font,
     info_font: pygame.font.Font,
     small_font: pygame.font.Font,
@@ -605,6 +716,21 @@ def draw_game(
         info_font,
         turn_color,
         (WINDOW_WIDTH // 2, 72),
+    )
+
+    if revolution:
+        revolution_text = "革命中：3が最強・2が最弱"
+        revolution_color = YELLOW
+    else:
+        revolution_text = "通常：2が最強・3が最弱"
+        revolution_color = WHITE
+
+    draw_text(
+        screen,
+        revolution_text,
+        small_font,
+        revolution_color,
+        (145, 72),
     )
     cpu_positions = (
         (WINDOW_WIDTH // 2, 110),
@@ -694,6 +820,7 @@ def handle_human_play(game: GameState) -> None:
         selected_cards,
         game.table_cards,
         game.first_turn,
+        game.revolution,
     )
     if not is_valid:
         game.message = error_message
@@ -711,11 +838,32 @@ def handle_human_play(game: GameState) -> None:
     game.first_turn = False
     played_text = " ".join(str(card) for card in selected_cards)
     game.message = f"あなたは {played_text} を出しました"
+
+    revolution_message: str | None = None
+
+    if is_revolution(selected_cards):
+        revolution_message = activate_revolution(game)
+        game.message = (
+            f"あなたは {played_text} を出しました　"
+            f"{revolution_message}"
+        )
+
     if is_eight_cut(selected_cards):
-        start_eight_cut_wait(game, 0)
+        start_eight_cut_wait(
+            game,
+            0,
+            revolution_message,
+        )
     elif game.game_over:
         game.current_player = -1
-        game.message = "ゲーム終了！順位が決まりました"
+
+        if revolution_message is None:
+            game.message = "ゲーム終了！順位が決まりました"
+        else:
+            game.message = (
+                f"{revolution_message}　"
+                "ゲーム終了！順位が決まりました"
+            )
     else:
         move_to_next_player(game, 0)
 
@@ -745,6 +893,7 @@ def process_cpu_turn(game: GameState) -> None:
         hand=game.hands[cpu_player],
         table_cards=game.table_cards,
         first_turn=game.first_turn,
+        revolution=game.revolution,
     )
     if cpu_cards:
         game.game_over = play_cards(
@@ -759,11 +908,32 @@ def process_cpu_turn(game: GameState) -> None:
         game.first_turn = False
         played_text = " ".join(str(card) for card in cpu_cards)
         game.message = f"{PLAYER_NAMES[cpu_player]}は {played_text} を出しました"
+
+        revolution_message: str | None = None
+
+        if is_revolution(cpu_cards):
+            revolution_message = activate_revolution(game)
+            game.message = (
+                f"{PLAYER_NAMES[cpu_player]}は {played_text} を出しました　"
+                f"{revolution_message}"
+            )
+
         if is_eight_cut(cpu_cards):
-            start_eight_cut_wait(game, cpu_player)
+            start_eight_cut_wait(
+                game,
+                cpu_player,
+                revolution_message,
+            )
         elif game.game_over:
             game.current_player = -1
-            game.message = "ゲーム終了！順位が決まりました"
+
+            if revolution_message is None:
+                game.message = "ゲーム終了！順位が決まりました"
+            else:
+                game.message = (
+                    f"{revolution_message}　"
+                    "ゲーム終了！順位が決まりました"
+                )
         else:
             move_to_next_player(game, cpu_player)
     else:
@@ -933,6 +1103,7 @@ def main() -> None:
                 eight_cut_pending=(
                     game.pending_eight_cut_player is not None
                 ),
+                revolution=game.revolution,
                 title_font=title_font,
                 info_font=info_font,
                 small_font=small_font,
