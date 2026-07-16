@@ -10,6 +10,7 @@ WINDOW_WIDTH = 1000
 WINDOW_HEIGHT = 700
 FPS = 60
 CPU_TURN_DELAY_MS = 850
+EIGHT_CUT_DISPLAY_MS = 2000
 
 CARD_WIDTH = 66
 CARD_HEIGHT = 96
@@ -59,6 +60,8 @@ class GameState:
     game_over: bool
     message: str
     turn_started_at: int
+    pending_eight_cut_player: int | None
+    eight_cut_display_started_at: int | None
 
 
 def create_font(size: int, bold: bool = False) -> pygame.font.Font:
@@ -112,6 +115,8 @@ def create_new_game() -> GameState:
             "ここから開始します"
         ),
         turn_started_at=pygame.time.get_ticks(),
+        pending_eight_cut_player=None,
+        eight_cut_display_started_at=None,
     )
 
 
@@ -359,6 +364,59 @@ def play_cards(
     return complete_ranking_if_game_over(hands, rankings)
 
 
+def is_eight_cut(cards: list[Card]) -> bool:
+    """出した組が8なら8切りを成立させる。"""
+    return bool(cards) and all(card.rank == "8" for card in cards)
+
+
+def start_eight_cut_wait(game: GameState, player_index: int) -> None:
+    """8を描画した後、一定時間表示してから場を流す準備をする。"""
+    game.pending_eight_cut_player = player_index
+
+    # ここではまだ時間を開始しない。
+    # pygame.display.flip()で8が実際に描画された後に開始する。
+    game.eight_cut_display_started_at = None
+
+    played_text = " ".join(str(card) for card in game.table_cards)
+    game.message = (
+        f"{PLAYER_NAMES[player_index]}は {played_text} を出しました　"
+        "8切り！"
+    )
+
+
+def apply_eight_cut(game: GameState, player_index: int) -> None:
+    """表示時間の経過後に場を流し、次の場を始める。"""
+    game.table_cards.clear()
+    game.passed_players.clear()
+    game.last_played_player = None
+    game.pending_eight_cut_player = None
+    game.eight_cut_display_started_at = None
+
+    if game.game_over:
+        game.current_player = -1
+        game.message = "8切り！ゲーム終了。順位が決まりました"
+        return
+
+    if game.hands[player_index]:
+        next_player = player_index
+    else:
+        next_player = get_next_player(
+            player_index,
+            game.hands,
+            set(),
+        )
+
+    if next_player is None:
+        raise RuntimeError("8切り後のプレイヤーを決められませんでした。")
+
+    game.current_player = next_player
+    game.message = (
+        "8切り！場が流れました。"
+        f"{PLAYER_NAMES[next_player]}から再開します"
+    )
+    game.turn_started_at = pygame.time.get_ticks()
+
+
 def process_pass(
     player_index: int,
     hands: list[list[Card]],
@@ -414,12 +472,13 @@ def draw_title_screen(
     for index, card in enumerate(sample_cards):
         rect = pygame.Rect(sample_x + index * 84, 190, CARD_WIDTH, CARD_HEIGHT)
         draw_card(screen, card, rect, card_font)
-    panel_rect = pygame.Rect(220, 325, 560, 125)
+    panel_rect = pygame.Rect(220, 310, 560, 155)
     draw_panel(screen, panel_rect)
     rules = (
         "♦3を持つ人からスタート",
         "3が最弱、2が最強／同じ数字は複数枚出せます",
         "全員がパスすると場が流れます",
+        "ローカルルール：8を出すと場が流れます",
     )
     for index, rule in enumerate(rules):
         draw_text(
@@ -427,7 +486,7 @@ def draw_title_screen(
             rule,
             small_font,
             WHITE,
-            (WINDOW_WIDTH // 2, 352 + index * 36),
+            (WINDOW_WIDTH // 2, 335 + index * 34),
         )
     draw_button(
         screen,
@@ -520,6 +579,7 @@ def draw_game(
     message: str,
     rankings: list[int],
     game_over: bool,
+    eight_cut_pending: bool,
     title_font: pygame.font.Font,
     info_font: pygame.font.Font,
     small_font: pygame.font.Font,
@@ -529,8 +589,23 @@ def draw_game(
     screen.fill(TABLE_COLOR)
     mouse_position = pygame.mouse.get_pos()
     draw_text(screen, "大富豪ゲーム", title_font, WHITE, (WINDOW_WIDTH // 2, 36))
-    turn_text = "ゲーム終了" if game_over else f"現在の番：{PLAYER_NAMES[current_player]}"
-    draw_text(screen, turn_text, info_font, LIGHT_BLUE, (WINDOW_WIDTH // 2, 72))
+    if eight_cut_pending:
+        turn_text = "8切り発動！"
+        turn_color = YELLOW
+    elif game_over:
+        turn_text = "ゲーム終了"
+        turn_color = LIGHT_BLUE
+    else:
+        turn_text = f"現在の番：{PLAYER_NAMES[current_player]}"
+        turn_color = LIGHT_BLUE
+
+    draw_text(
+        screen,
+        turn_text,
+        info_font,
+        turn_color,
+        (WINDOW_WIDTH // 2, 72),
+    )
     cpu_positions = (
         (WINDOW_WIDTH // 2, 110),
         (130, WINDOW_HEIGHT // 2),
@@ -557,7 +632,12 @@ def draw_game(
     draw_text(screen, table_text, info_font, WHITE, (WINDOW_WIDTH // 2, 225))
     draw_table_cards(screen, table_cards, card_font)
     draw_text(screen, message, small_font, YELLOW, (WINDOW_WIDTH // 2, 405))
-    human_turn = not game_over and current_player == 0 and bool(hands[0])
+    human_turn = (
+        not game_over
+        and not eight_cut_pending
+        and current_player == 0
+        and bool(hands[0])
+    )
     draw_button(
         screen,
         PLAY_BUTTON_RECT,
@@ -631,7 +711,9 @@ def handle_human_play(game: GameState) -> None:
     game.first_turn = False
     played_text = " ".join(str(card) for card in selected_cards)
     game.message = f"あなたは {played_text} を出しました"
-    if game.game_over:
+    if is_eight_cut(selected_cards):
+        start_eight_cut_wait(game, 0)
+    elif game.game_over:
         game.current_player = -1
         game.message = "ゲーム終了！順位が決まりました"
     else:
@@ -677,7 +759,9 @@ def process_cpu_turn(game: GameState) -> None:
         game.first_turn = False
         played_text = " ".join(str(card) for card in cpu_cards)
         game.message = f"{PLAYER_NAMES[cpu_player]}は {played_text} を出しました"
-        if game.game_over:
+        if is_eight_cut(cpu_cards):
+            start_eight_cut_wait(game, cpu_player)
+        elif game.game_over:
             game.current_player = -1
             game.message = "ゲーム終了！順位が決まりました"
         else:
@@ -762,6 +846,7 @@ def main() -> None:
                     and event.button == 1
                     and not game.game_over
                     and game.current_player == 0
+                    and game.pending_eight_cut_player is None
                 ):
                     if PLAY_BUTTON_RECT.collidepoint(event.pos):
                         handle_human_play(game)
@@ -777,6 +862,7 @@ def main() -> None:
                     event.type == pygame.KEYDOWN
                     and not game.game_over
                     and game.current_player == 0
+                    and game.pending_eight_cut_player is None
                 ):
                     if event.key == pygame.K_ESCAPE:
                         game.selected_indices.clear()
@@ -789,16 +875,37 @@ def main() -> None:
         if screen_mode == "game":
             if game is None:
                 raise RuntimeError("ゲーム状態がありません。")
-            cpu_wait_finished = (
-                pygame.time.get_ticks() - game.turn_started_at >= CPU_TURN_DELAY_MS
-            )
+            current_time = pygame.time.get_ticks()
+
+            if game.pending_eight_cut_player is not None:
+                # 8が少なくとも1回画面に描画されてから時間を数える。
+                if game.eight_cut_display_started_at is not None:
+                    eight_cut_wait_finished = (
+                        current_time
+                        - game.eight_cut_display_started_at
+                        >= EIGHT_CUT_DISPLAY_MS
+                    )
+                    if eight_cut_wait_finished:
+                        apply_eight_cut(
+                            game,
+                            game.pending_eight_cut_player,
+                        )
+            else:
+                cpu_wait_finished = (
+                    current_time - game.turn_started_at
+                    >= CPU_TURN_DELAY_MS
+                )
+                if (
+                    not game.game_over
+                    and game.current_player != 0
+                    and cpu_wait_finished
+                ):
+                    process_cpu_turn(game)
+
             if (
-                not game.game_over
-                and game.current_player != 0
-                and cpu_wait_finished
+                game.game_over
+                and game.pending_eight_cut_player is None
             ):
-                process_cpu_turn(game)
-            if game.game_over:
                 screen_mode = "result"
 
         if screen_mode == "title":
@@ -823,6 +930,9 @@ def main() -> None:
                 message=game.message,
                 rankings=game.rankings,
                 game_over=game.game_over,
+                eight_cut_pending=(
+                    game.pending_eight_cut_player is not None
+                ),
                 title_font=title_font,
                 info_font=info_font,
                 small_font=small_font,
@@ -842,6 +952,17 @@ def main() -> None:
             )
 
         pygame.display.flip()
+
+        # 8のカードが実際に画面へ表示された後で、
+        # 2秒間の表示タイマーを開始する。
+        if (
+            screen_mode == "game"
+            and game is not None
+            and game.pending_eight_cut_player is not None
+            and game.eight_cut_display_started_at is None
+        ):
+            game.eight_cut_display_started_at = pygame.time.get_ticks()
+
         clock.tick(FPS)
 
     pygame.quit()
