@@ -6,7 +6,9 @@ from game_engine import (
     analyze_play,
     choose_cpu_play,
     create_game,
+    is_forbidden_finish,
     is_spade_three_return,
+    playable_card_indices,
     rank_titles_for,
     validate_play,
 )
@@ -97,6 +99,56 @@ def test_cpu_difficulties() -> None:
         assert cards
 
 
+def test_forbidden_finish_without_two() -> None:
+    rules = RuleSettings.from_preset("standard")
+    session = GameSession(rules, player_count=2)
+    state = create_game(session)
+
+    two = analyze_play([Card("♠", "2")], rules)
+    eight = analyze_play([Card("♠", "8")], rules)
+    joker = analyze_play([Card("JOKER", "JOKER")], rules)
+
+    assert two is not None
+    assert eight is not None
+    assert joker is not None
+
+    # 2上がりは通常時・革命時とも禁止上がりにしない。
+    assert not is_forbidden_finish(state, two, 0)
+    state.revolution = True
+    assert not is_forbidden_finish(state, two, 0)
+
+    # 8切り有効時の8上がりとジョーカー上がりは従来どおり禁止。
+    assert is_forbidden_finish(state, eight, 0)
+    assert is_forbidden_finish(state, joker, 0)
+
+
+def test_playable_card_highlight() -> None:
+    rules = RuleSettings.from_preset("standard")
+    session = GameSession(rules, player_count=2)
+    state = create_game(session)
+
+    state.current_player = 0
+    state.first_turn = False
+    state.hands[0] = [
+        Card("♠", "6"),
+        Card("♥", "6"),
+        Card("♠", "8"),
+        Card("♥", "8"),
+        Card("♣", "10"),
+    ]
+    state.table_cards = [
+        Card("♠", "7"),
+        Card("♥", "7"),
+    ]
+    state.table_pattern = analyze_play(state.table_cards, rules)
+
+    # 場が7のペアなので、出せる8のペアだけが明るくなる。
+    assert playable_card_indices(state, 0, set()) == {2, 3}
+
+    # 8を1枚選ぶと、もう一方の8だけを追加選択できる。
+    assert playable_card_indices(state, 0, {2}) == {2, 3}
+
+
 if __name__ == "__main__":
     test_patterns()
     test_spade_three_return()
@@ -104,4 +156,6 @@ if __name__ == "__main__":
     test_demo_mode()
     test_first_turn_validation()
     test_cpu_difficulties()
+    test_forbidden_finish_without_two()
+    test_playable_card_highlight()
     print("主要機能の簡易テストに成功しました。")

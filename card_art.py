@@ -325,6 +325,7 @@ def draw_card_front(
     fonts: CardFonts,
     selected: bool = False,
     draw_shadow: bool = True,
+    dimmed: bool = False,
 ) -> None:
     if draw_shadow:
         pygame.draw.rect(surface, SHADOW, rect.move(4, 5), border_radius=8)
@@ -357,6 +358,26 @@ def draw_card_front(
         _draw_number_art(surface, card, rect, fonts)
 
     surface.set_clip(previous_clip)
+
+    if dimmed:
+        overlay = pygame.Surface(
+            (rect.width, rect.height),
+            pygame.SRCALPHA,
+        )
+        pygame.draw.rect(
+            overlay,
+            (18, 25, 23, 165),
+            overlay.get_rect(),
+            border_radius=8,
+        )
+        surface.blit(overlay, rect.topleft)
+        pygame.draw.rect(
+            surface,
+            (75, 82, 79),
+            rect,
+            width=2,
+            border_radius=8,
+        )
 
 
 def draw_card_back(

@@ -17,6 +17,7 @@ from game_engine import (
     create_game,
     pass_turn,
     play_cards,
+    playable_card_indices,
     process_cpu_turn,
     rank_titles_for,
     resolve_pending_display,
@@ -325,15 +326,26 @@ def draw_human_hand(
     hand: list[Card],
     selected: set[int],
     fonts: CardFonts,
+    bright_indices: set[int] | None = None,
 ) -> None:
+    """手札を描画し、現在出せないカードを暗く表示する。"""
     rects = human_card_rects(hand, selected)
+
     for index, card in enumerate(hand):
+        is_selected = index in selected
+        is_dimmed = (
+            bright_indices is not None
+            and index not in bright_indices
+            and not is_selected
+        )
+
         draw_card_front(
             screen,
             card,
             rects[index],
             fonts,
-            selected=index in selected,
+            selected=is_selected,
+            dimmed=is_dimmed,
         )
 
 
@@ -869,7 +881,31 @@ def draw_game_screen(
         selection_text = f"選択中：{len(state.selected_indices)}枚"
 
     draw_text(screen, selection_text, fonts.small, YELLOW, (WINDOW_WIDTH // 2, 653))
-    draw_human_hand(screen, state.hands[0], state.selected_indices, fonts.card)
+
+    if (
+        state.pending_selection
+        and state.pending_selection.source_player == 0
+    ):
+        if len(state.selected_indices) < state.pending_selection.count:
+            bright_indices = set(range(len(state.hands[0])))
+        else:
+            bright_indices = set(state.selected_indices)
+    elif human_turn:
+        bright_indices = playable_card_indices(
+            state,
+            0,
+            state.selected_indices,
+        )
+    else:
+        bright_indices = set()
+
+    draw_human_hand(
+        screen,
+        state.hands[0],
+        state.selected_indices,
+        fonts.card,
+        bright_indices,
+    )
 
     for place, player in enumerate(state.rankings, 1):
         draw_text(
@@ -921,13 +957,42 @@ def draw_result_screen(screen: pygame.Surface, state: GameState, fonts: Fonts) -
 
 
 def toggle_card_selection(state: GameState, position: tuple[int, int]) -> None:
-    index = clicked_card_index(position, state.hands[0], state.selected_indices)
+    index = clicked_card_index(
+        position,
+        state.hands[0],
+        state.selected_indices,
+    )
+
     if index is None:
         return
+
     if index in state.selected_indices:
         state.selected_indices.remove(index)
-    else:
+        return
+
+    if (
+        state.pending_selection
+        and state.pending_selection.source_player == 0
+    ):
+        if len(state.selected_indices) < state.pending_selection.count:
+            state.selected_indices.add(index)
+        else:
+            state.message = (
+                f"{state.pending_selection.count}枚まで選択できます。"
+                "別のカードを選ぶには、先に選択を解除してください"
+            )
+        return
+
+    selectable = playable_card_indices(
+        state,
+        0,
+        state.selected_indices,
+    )
+
+    if index in selectable:
         state.selected_indices.add(index)
+    else:
+        state.message = "このカードを含む、現在出せる組み合わせはありません"
 
 
 def handle_play_or_confirm(

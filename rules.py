@@ -68,7 +68,7 @@ RULE_INFOS: tuple[RuleInfo, ...] = (
     RuleInfo("seven_pass", "7渡し", "出した7の枚数だけ次の人へカードを渡す"),
     RuleInfo("ten_discard", "10捨て", "出した10の枚数だけ手札を捨てる"),
     RuleInfo("eleven_back", "11バック", "Jが出た場だけ強さが一時的に逆転"),
-    RuleInfo("forbidden_finish", "禁止上がり", "最強札・8・ジョーカーでの上がりを禁止"),
+    RuleInfo("forbidden_finish", "禁止上がり", "8切り有効時の8・ジョーカーでの上がりを禁止"),
     RuleInfo("card_exchange", "カード交換", "2戦目以降、階級に応じてカードを交換"),
     RuleInfo("capital_fall", "都落ち", "前回の大富豪が1位を逃すと大貧民になる"),
 )

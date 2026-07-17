@@ -331,14 +331,17 @@ def validate_play(
     return True, "", pattern
 
 
-def is_forbidden_finish(state: GameState, pattern: PlayPattern, remaining_count: int) -> bool:
-    """禁止上がりはプレイを拒否せず、上がった人を最下位側へ送る。"""
+def is_forbidden_finish(
+    state: GameState,
+    pattern: PlayPattern,
+    remaining_count: int,
+) -> bool:
+    """8切りが有効な場合の8上がりと、ジョーカー上がりだけを禁止する。"""
     if not state.rules.forbidden_finish or remaining_count != 0:
         return False
-    weakest_forbidden = "3" if state.effective_reverse else "2"
+
     return (
-        pattern.represents_rank(weakest_forbidden)
-        or (state.rules.eight_cut and pattern.represents_rank("8"))
+        (state.rules.eight_cut and pattern.represents_rank("8"))
         or any(card.is_joker for card in pattern.cards)
     )
 
@@ -1021,6 +1024,65 @@ def generate_cpu_candidates(state: GameState, player_index: int) -> list[list[Ca
         key = tuple(sorted(cards, key=card_sort_key))
         unique[key] = cards
     return list(unique.values())
+
+
+def playable_card_indices(
+    state: GameState,
+    player_index: int = 0,
+    selected_indices: set[int] | None = None,
+) -> set[int]:
+    """現在選択中のカードから、合法手へつなげられる手札番号を返す。
+
+    選択がない場合は、合法手のどれかに含まれるカードをすべて返す。
+    選択中の場合は、その選択を含む合法手に追加できるカードだけを返す。
+    """
+    if (
+        state.game_over
+        or state.current_player != player_index
+        or state.pending_selection is not None
+        or state.pending_display is not None
+        or player_index in state.rankings
+        or player_index in state.penalty_players
+    ):
+        return set()
+
+    hand = state.hands[player_index]
+    if not hand:
+        return set()
+
+    selected_indices = selected_indices or set()
+    selected_cards = {
+        hand[index]
+        for index in selected_indices
+        if 0 <= index < len(hand)
+    }
+
+    index_by_card = {
+        card: index
+        for index, card in enumerate(hand)
+    }
+
+    playable: set[int] = set(selected_indices)
+
+    for cards in generate_cpu_candidates(state, player_index):
+        valid, _, pattern = validate_play(
+            state,
+            player_index,
+            cards,
+        )
+
+        if not valid or pattern is None:
+            continue
+
+        candidate_set = set(cards)
+
+        if not selected_cards.issubset(candidate_set):
+            continue
+
+        for card in cards:
+            playable.add(index_by_card[card])
+
+    return playable
 
 
 def _normal_cpu_score(
