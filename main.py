@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 
 import pygame
@@ -71,20 +72,20 @@ RESULT_NEXT_RECT = pygame.Rect(405, 640, 370, 58)
 RESULT_TITLE_RECT = pygame.Rect(405, 710, 370, 50)
 
 CPU_COUNT_RECTS = {
-    1: pygame.Rect(420, 180, 110, 48),
-    2: pygame.Rect(565, 180, 110, 48),
-    3: pygame.Rect(710, 180, 110, 48),
+    1: pygame.Rect(390, 190, 120, 48),
+    2: pygame.Rect(530, 190, 120, 48),
+    3: pygame.Rect(670, 190, 120, 48),
 }
 DIFFICULTY_RECTS = {
-    "easy": pygame.Rect(410, 300, 145, 48),
-    "normal": pygame.Rect(575, 300, 145, 48),
-    "hard": pygame.Rect(740, 300, 145, 48),
+    "easy": pygame.Rect(350, 315, 155, 48),
+    "normal": pygame.Rect(525, 315, 155, 48),
+    "hard": pygame.Rect(700, 315, 155, 48),
 }
-DEMO_RECT = pygame.Rect(440, 405, 390, 52)
+DEMO_RECT = pygame.Rect(350, 430, 500, 52)
 PRESET_RECTS = {
-    "simple": pygame.Rect(410, 530, 145, 48),
-    "standard": pygame.Rect(575, 530, 145, 48),
-    "party": pygame.Rect(740, 530, 145, 48),
+    "simple": pygame.Rect(340, 550, 155, 48),
+    "standard": pygame.Rect(515, 550, 155, 48),
+    "party": pygame.Rect(690, 550, 155, 48),
 }
 
 
@@ -114,12 +115,43 @@ class PlayAnimation:
 
 
 def create_font(size: int, bold: bool = False) -> pygame.font.Font:
-    for name in ("meiryo", "yugothic", "msgothic"):
-        path = pygame.font.match_font(name)
+    """読みやすい日本語UIフォントを優先して読み込む。"""
+    windows_fonts = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+
+    if bold:
+        file_candidates = (
+            "YuGothB.ttc",
+            "meiryob.ttc",
+            "BIZ-UDGothicB.ttc",
+        )
+    else:
+        file_candidates = (
+            "YuGothR.ttc",
+            "YuGothM.ttc",
+            "meiryo.ttc",
+            "BIZ-UDGothicR.ttc",
+        )
+
+    for filename in file_candidates:
+        path = windows_fonts / filename
+        if path.exists():
+            return pygame.font.Font(str(path), size)
+
+    family_candidates = (
+        "Yu Gothic UI",
+        "Yu Gothic",
+        "Meiryo UI",
+        "Meiryo",
+        "BIZ UDPGothic",
+        "Noto Sans CJK JP",
+        "Noto Sans JP",
+    )
+
+    for family in family_candidates:
+        path = pygame.font.match_font(family, bold=bold)
         if path:
-            font = pygame.font.Font(path, size)
-            font.set_bold(bold)
-            return font
+            return pygame.font.Font(path, size)
+
     font = pygame.font.Font(None, size)
     font.set_bold(bold)
     return font
@@ -127,21 +159,20 @@ def create_font(size: int, bold: bool = False) -> pygame.font.Font:
 
 def create_fonts() -> Fonts:
     return Fonts(
-        title=create_font(48, True),
+        title=create_font(46, True),
         heading=create_font(30, True),
-        info=create_font(20, True),
-        small=create_font(16, False),
-        tiny=create_font(13, False),
-        button=create_font(20, True),
+        info=create_font(18, True),
+        small=create_font(15, False),
+        tiny=create_font(12, False),
+        button=create_font(18, True),
         card=CardFonts(
-            corner=create_font(15, True),
-            suit=create_font(21, True),
-            center=create_font(25, True),
-            face=create_font(18, True),
-            tiny=create_font(11, True),
+            corner=create_font(14, True),
+            suit=create_font(18, True),
+            center=create_font(27, True),
+            face=create_font(15, True),
+            tiny=create_font(10, True),
         ),
     )
-
 
 def draw_text(
     screen: pygame.Surface,
@@ -152,6 +183,48 @@ def draw_text(
 ) -> None:
     surface = font.render(text, True, color)
     screen.blit(surface, surface.get_rect(center=center))
+
+
+def draw_text_left(
+    screen: pygame.Surface,
+    text: str,
+    font: pygame.font.Font,
+    color: tuple[int, int, int],
+    left: int,
+    center_y: int,
+) -> None:
+    surface = font.render(text, True, color)
+    screen.blit(surface, surface.get_rect(midleft=(left, center_y)))
+
+
+def draw_fitted_text(
+    screen: pygame.Surface,
+    text: str,
+    font: pygame.font.Font,
+    color: tuple[int, int, int],
+    rect: pygame.Rect,
+    padding_x: int = 14,
+    padding_y: int = 8,
+) -> None:
+    """長い文字列もボタン内に収まるように縮小して描画する。"""
+    surface = font.render(text, True, color)
+    max_width = max(1, rect.width - padding_x * 2)
+    max_height = max(1, rect.height - padding_y * 2)
+
+    scale = min(
+        1.0,
+        max_width / max(1, surface.get_width()),
+        max_height / max(1, surface.get_height()),
+    )
+
+    if scale < 1.0:
+        new_size = (
+            max(1, int(surface.get_width() * scale)),
+            max(1, int(surface.get_height() * scale)),
+        )
+        surface = pygame.transform.smoothscale(surface, new_size)
+
+    screen.blit(surface, surface.get_rect(center=rect.center))
 
 
 def draw_text_right(
@@ -192,9 +265,23 @@ def draw_button(
     else:
         color = BUTTON_COLOR
 
-    pygame.draw.rect(screen, color, rect, border_radius=9)
-    pygame.draw.rect(screen, BLACK, rect, width=2, border_radius=9)
-    draw_text(screen, label, font, BLACK, rect.center)
+    # わずかな影と細い枠で、重たく見えないUIにする。
+    pygame.draw.rect(
+        screen,
+        (12, 55, 37),
+        rect.move(0, 3),
+        border_radius=10,
+    )
+    pygame.draw.rect(screen, color, rect, border_radius=10)
+    border_color = WHITE if selected else (27, 51, 39)
+    pygame.draw.rect(
+        screen,
+        border_color,
+        rect,
+        width=2 if selected else 1,
+        border_radius=10,
+    )
+    draw_fitted_text(screen, label, font, BLACK, rect)
 
 
 def human_card_rects(hand: list[Card], selected: set[int]) -> list[pygame.Rect]:
@@ -388,20 +475,29 @@ def draw_settings_screen(
     fonts: Fonts,
 ) -> None:
     screen.fill(DARK_TABLE_COLOR)
-    draw_text(screen, "ゲーム設定", fonts.heading, WHITE, (WINDOW_WIDTH // 2, 55))
+    draw_text(
+        screen,
+        "ゲーム設定",
+        fonts.heading,
+        WHITE,
+        (WINDOW_WIDTH // 2, 55),
+    )
 
-    panel = pygame.Rect(215, 105, 750, 520)
+    panel = pygame.Rect(160, 105, 860, 545)
     draw_panel(screen, panel)
 
-    # 項目名の右端をそろえ、ボタンとの間に余白を確保する。
-    label_right = 365
-    draw_text_right(
+    label_x = panel.x + 48
+    divider_color = (68, 139, 104)
+
+    # CPU人数
+    draw_text_left(screen, "CPU人数", fonts.info, WHITE, label_x, 158)
+    draw_text_left(
         screen,
-        "CPU人数",
-        fonts.info,
-        WHITE,
-        label_right,
-        204,
+        "対戦するコンピューターの人数",
+        fonts.tiny,
+        (196, 222, 209),
+        label_x,
+        180,
     )
     for count, rect in CPU_COUNT_RECTS.items():
         draw_button(
@@ -411,14 +507,17 @@ def draw_settings_screen(
             fonts.button,
             selected=settings.cpu_count == count,
         )
+    pygame.draw.line(screen, divider_color, (205, 270), (975, 270), 1)
 
-    draw_text_right(
+    # CPU難易度
+    draw_text_left(screen, "CPU難易度", fonts.info, WHITE, label_x, 283)
+    draw_text_left(
         screen,
-        "CPU難易度",
-        fonts.info,
-        WHITE,
-        label_right,
-        324,
+        "CPUがカードを選ぶ考え方を変更します",
+        fonts.tiny,
+        (196, 222, 209),
+        label_x,
+        305,
     )
     for key, rect in DIFFICULTY_RECTS.items():
         draw_button(
@@ -428,16 +527,23 @@ def draw_settings_screen(
             fonts.button,
             selected=settings.cpu_difficulty == key,
         )
+    pygame.draw.line(screen, divider_color, (205, 385), (975, 385), 1)
 
-    draw_text_right(
+    # デモモード
+    draw_text_left(screen, "デモモード", fonts.info, WHITE, label_x, 398)
+    draw_text_left(
         screen,
-        "デモモード",
-        fonts.info,
-        WHITE,
-        label_right,
-        431,
+        "特殊ルールを確認しやすい配札にします",
+        fonts.tiny,
+        (196, 222, 209),
+        label_x,
+        420,
     )
-    demo_label = "ON（特殊札を確認しやすい配札）" if settings.demo_mode else "OFF（通常のランダム配札）"
+    demo_label = (
+        "ON　特殊札を確認しやすい配札"
+        if settings.demo_mode
+        else "OFF　通常のランダム配札"
+    )
     draw_button(
         screen,
         DEMO_RECT,
@@ -445,32 +551,60 @@ def draw_settings_screen(
         fonts.small,
         selected=settings.demo_mode,
     )
+    pygame.draw.line(screen, divider_color, (205, 505), (975, 505), 1)
 
-    draw_text_right(
+    # ルールプリセット
+    draw_text_left(
         screen,
         "ルールプリセット",
         fonts.info,
         WHITE,
-        label_right,
-        554,
+        label_x,
+        518,
+    )
+    draw_text_left(
+        screen,
+        "代表的な組み合わせを一度に選択",
+        fonts.tiny,
+        (196, 222, 209),
+        label_x,
+        540,
     )
     for name, rect in PRESET_RECTS.items():
-        label = {"simple": "基本のみ", "standard": "標準", "party": "全部ON"}[name]
+        label = {
+            "simple": "基本のみ",
+            "standard": "標準",
+            "party": "全部ON",
+        }[name]
         draw_button(screen, rect, label, fonts.small)
 
     enabled_count = sum(settings.rules.to_dict().values())
     draw_text(
         screen,
-        f"現在ONのローカルルール：{enabled_count}/{len(RULE_INFOS)}",
+        f"現在ONのローカルルール　{enabled_count} / {len(RULE_INFOS)}",
         fonts.small,
         LIGHT_BLUE,
-        (WINDOW_WIDTH // 2, 603),
+        (WINDOW_WIDTH // 2, 622),
     )
 
-    draw_button(screen, SETTINGS_RULES_RECT, "ローカルルール詳細", fonts.button)
-    draw_button(screen, SETTINGS_BACK_RECT, "変更を戻して戻る", fonts.small)
-    draw_button(screen, SETTINGS_SAVE_RECT, "保存してタイトルへ", fonts.small)
-
+    draw_button(
+        screen,
+        SETTINGS_RULES_RECT,
+        "ローカルルール詳細",
+        fonts.button,
+    )
+    draw_button(
+        screen,
+        SETTINGS_BACK_RECT,
+        "変更を戻して戻る",
+        fonts.small,
+    )
+    draw_button(
+        screen,
+        SETTINGS_SAVE_RECT,
+        "保存してタイトルへ",
+        fonts.small,
+    )
 
 def rule_checkbox_rects() -> dict[str, pygame.Rect]:
     rects: dict[str, pygame.Rect] = {}
