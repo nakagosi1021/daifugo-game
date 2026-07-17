@@ -1,62 +1,116 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from pathlib import Path
+
 import pygame
 
+from app_settings import AppSettings, DIFFICULTY_LABELS, load_settings, save_settings
 from card import Card
+from card_art import CardFonts, draw_card_back, draw_card_front
 from game_engine import (
     GameSession,
     GameState,
     PLAYER_NAMES,
-    RANK_TITLES,
     confirm_pending_selection,
     create_game,
     pass_turn,
     play_cards,
     process_cpu_turn,
+    rank_titles_for,
     resolve_pending_display,
     state_status_lines,
     table_description,
 )
 from rules import RULE_INFOS, RuleSettings
 
-WINDOW_WIDTH = 1100
-WINDOW_HEIGHT = 760
-FPS = 60
-CPU_TURN_DELAY_MS = 850
 
-CARD_WIDTH = 64
-CARD_HEIGHT = 94
-SELECTED_RAISE = 24
+WINDOW_WIDTH = 1180
+WINDOW_HEIGHT = 820
+FPS = 60
+CARD_WIDTH = 72
+CARD_HEIGHT = 104
+SELECTED_RAISE = 25
+SETTINGS_PATH = Path(__file__).with_name("settings.json")
 
 TABLE_COLOR = (31, 116, 72)
-DARK_TABLE_COLOR = (16, 72, 47)
+DARK_TABLE_COLOR = (15, 66, 45)
 PANEL_COLOR = (24, 91, 59)
-CARD_COLOR = (250, 249, 244)
-CARD_BORDER = (30, 30, 30)
-SHADOW_COLOR = (13, 65, 40)
+PANEL_DARK = (20, 75, 51)
 WHITE = (255, 255, 255)
 BLACK = (25, 25, 25)
-RED = (195, 36, 42)
 YELLOW = (255, 222, 70)
 LIGHT_BLUE = (164, 221, 255)
 GREEN = (92, 220, 126)
 GRAY = (150, 150, 150)
-PURPLE = (125, 61, 170)
 BUTTON_COLOR = (238, 238, 238)
 BUTTON_HOVER = (255, 255, 255)
 BUTTON_DISABLED = (145, 145, 145)
+SELECTED_BUTTON = (121, 218, 147)
+SHADOW_COLOR = (13, 65, 40)
 
-TITLE_START_RECT = pygame.Rect(385, 480, 330, 62)
-TITLE_QUIT_RECT = pygame.Rect(385, 560, 330, 54)
-RULE_START_RECT = pygame.Rect(770, 665, 260, 55)
-RULE_BACK_RECT = pygame.Rect(70, 665, 210, 55)
-PRESET_SIMPLE_RECT = pygame.Rect(340, 665, 125, 55)
-PRESET_STANDARD_RECT = pygame.Rect(480, 665, 140, 55)
-PRESET_PARTY_RECT = pygame.Rect(635, 665, 120, 55)
-PLAY_RECT = pygame.Rect(415, 500, 125, 48)
-PASS_RECT = pygame.Rect(560, 500, 125, 48)
-RESULT_NEXT_RECT = pygame.Rect(365, 560, 370, 58)
-RESULT_RESET_RECT = pygame.Rect(365, 630, 370, 50)
+TITLE_START_RECT = pygame.Rect(430, 380, 320, 60)
+TITLE_SETTINGS_RECT = pygame.Rect(430, 455, 320, 55)
+TITLE_HELP_RECT = pygame.Rect(430, 525, 320, 55)
+TITLE_QUIT_RECT = pygame.Rect(430, 595, 320, 55)
+
+SETTINGS_BACK_RECT = pygame.Rect(75, 730, 220, 55)
+SETTINGS_RULES_RECT = pygame.Rect(430, 645, 320, 55)
+SETTINGS_SAVE_RECT = pygame.Rect(850, 730, 255, 55)
+
+RULE_BACK_RECT = pygame.Rect(75, 735, 220, 52)
+RULE_SIMPLE_RECT = pygame.Rect(390, 735, 125, 52)
+RULE_STANDARD_RECT = pygame.Rect(530, 735, 135, 52)
+RULE_ALL_RECT = pygame.Rect(680, 735, 125, 52)
+
+HELP_BACK_RECT = pygame.Rect(455, 735, 270, 52)
+
+PLAY_RECT = pygame.Rect(440, 545, 135, 48)
+PASS_RECT = pygame.Rect(600, 545, 135, 48)
+RESULT_NEXT_RECT = pygame.Rect(405, 640, 370, 58)
+RESULT_TITLE_RECT = pygame.Rect(405, 710, 370, 50)
+
+CPU_COUNT_RECTS = {
+    1: pygame.Rect(420, 180, 110, 48),
+    2: pygame.Rect(565, 180, 110, 48),
+    3: pygame.Rect(710, 180, 110, 48),
+}
+DIFFICULTY_RECTS = {
+    "easy": pygame.Rect(410, 300, 145, 48),
+    "normal": pygame.Rect(575, 300, 145, 48),
+    "hard": pygame.Rect(740, 300, 145, 48),
+}
+DEMO_RECT = pygame.Rect(440, 405, 390, 52)
+PRESET_RECTS = {
+    "simple": pygame.Rect(410, 530, 145, 48),
+    "standard": pygame.Rect(575, 530, 145, 48),
+    "party": pygame.Rect(740, 530, 145, 48),
+}
+
+
+@dataclass(slots=True)
+class Fonts:
+    title: pygame.font.Font
+    heading: pygame.font.Font
+    info: pygame.font.Font
+    small: pygame.font.Font
+    tiny: pygame.font.Font
+    button: pygame.font.Font
+    card: CardFonts
+
+
+@dataclass(slots=True)
+class PlayAnimation:
+    cards: list[Card]
+    player_index: int
+    started_at: int
+    duration_ms: int = 420
+
+    def progress(self, now: int) -> float:
+        return min(1.0, max(0.0, (now - self.started_at) / self.duration_ms))
+
+    def finished(self, now: int) -> bool:
+        return now - self.started_at >= self.duration_ms
 
 
 def create_font(size: int, bold: bool = False) -> pygame.font.Font:
@@ -71,6 +125,24 @@ def create_font(size: int, bold: bool = False) -> pygame.font.Font:
     return font
 
 
+def create_fonts() -> Fonts:
+    return Fonts(
+        title=create_font(48, True),
+        heading=create_font(30, True),
+        info=create_font(20, True),
+        small=create_font(16, False),
+        tiny=create_font(13, False),
+        button=create_font(20, True),
+        card=CardFonts(
+            corner=create_font(15, True),
+            suit=create_font(21, True),
+            center=create_font(25, True),
+            face=create_font(18, True),
+            tiny=create_font(11, True),
+        ),
+    )
+
+
 def draw_text(
     screen: pygame.Surface,
     text: str,
@@ -82,9 +154,23 @@ def draw_text(
     screen.blit(surface, surface.get_rect(center=center))
 
 
-def draw_panel(screen: pygame.Surface, rect: pygame.Rect) -> None:
+def draw_text_right(
+    screen: pygame.Surface,
+    text: str,
+    font: pygame.font.Font,
+    color: tuple[int, int, int],
+    right: int,
+    center_y: int,
+) -> None:
+    """文字列の右端をそろえて描画する。"""
+    surface = font.render(text, True, color)
+    rect = surface.get_rect(midright=(right, center_y))
+    screen.blit(surface, rect)
+
+
+def draw_panel(screen: pygame.Surface, rect: pygame.Rect, dark: bool = False) -> None:
     pygame.draw.rect(screen, SHADOW_COLOR, rect.move(5, 6), border_radius=14)
-    pygame.draw.rect(screen, PANEL_COLOR, rect, border_radius=14)
+    pygame.draw.rect(screen, PANEL_DARK if dark else PANEL_COLOR, rect, border_radius=14)
     pygame.draw.rect(screen, WHITE, rect, width=2, border_radius=14)
 
 
@@ -94,87 +180,72 @@ def draw_button(
     label: str,
     font: pygame.font.Font,
     enabled: bool = True,
+    selected: bool = False,
 ) -> None:
     mouse = pygame.mouse.get_pos()
     if not enabled:
         color = BUTTON_DISABLED
+    elif selected:
+        color = SELECTED_BUTTON
     elif rect.collidepoint(mouse):
         color = BUTTON_HOVER
     else:
         color = BUTTON_COLOR
+
     pygame.draw.rect(screen, color, rect, border_radius=9)
     pygame.draw.rect(screen, BLACK, rect, width=2, border_radius=9)
     draw_text(screen, label, font, BLACK, rect.center)
 
 
-def card_rects(hand: list[Card], selected: set[int]) -> list[pygame.Rect]:
+def human_card_rects(hand: list[Card], selected: set[int]) -> list[pygame.Rect]:
     if not hand:
         return []
-    available_width = WINDOW_WIDTH - 44
+
+    available_width = WINDOW_WIDTH - 54
     if len(hand) == 1:
         step = 0.0
-        total = CARD_WIDTH
+        total_width = CARD_WIDTH
     else:
-        normal_step = CARD_WIDTH + 5
+        normal_step = CARD_WIDTH + 6
         normal_total = CARD_WIDTH + normal_step * (len(hand) - 1)
         step = normal_step if normal_total <= available_width else (
             available_width - CARD_WIDTH
         ) / (len(hand) - 1)
-        total = CARD_WIDTH + step * (len(hand) - 1)
-    start_x = (WINDOW_WIDTH - total) / 2
-    base_y = WINDOW_HEIGHT - CARD_HEIGHT - 22
-    result: list[pygame.Rect] = []
+        total_width = CARD_WIDTH + step * (len(hand) - 1)
+
+    start_x = (WINDOW_WIDTH - total_width) / 2
+    base_y = WINDOW_HEIGHT - CARD_HEIGHT - 17
+    rects: list[pygame.Rect] = []
+
     for index in range(len(hand)):
         y = base_y - SELECTED_RAISE if index in selected else base_y
-        result.append(pygame.Rect(int(start_x + step * index), int(y), CARD_WIDTH, CARD_HEIGHT))
-    return result
+        rects.append(
+            pygame.Rect(
+                int(start_x + step * index),
+                int(y),
+                CARD_WIDTH,
+                CARD_HEIGHT,
+            )
+        )
+
+    return rects
 
 
-def draw_card(
-    screen: pygame.Surface,
-    card: Card,
-    rect: pygame.Rect,
-    card_font: pygame.font.Font,
-    selected: bool = False,
-) -> None:
-    pygame.draw.rect(screen, SHADOW_COLOR, rect.move(4, 5), border_radius=7)
-    pygame.draw.rect(screen, CARD_COLOR, rect, border_radius=7)
-    border = YELLOW if selected else CARD_BORDER
-    pygame.draw.rect(screen, border, rect, width=4 if selected else 2, border_radius=7)
-
-    if card.is_joker:
-        label = "JK"
-        color = PURPLE
-    else:
-        label = str(card)
-        color = RED if card.suit in ("♥", "♦") else BLACK
-    draw_text(screen, label, card_font, color, rect.center)
-
-
-def draw_hand(
+def draw_human_hand(
     screen: pygame.Surface,
     hand: list[Card],
     selected: set[int],
-    card_font: pygame.font.Font,
+    fonts: CardFonts,
 ) -> None:
-    rects = card_rects(hand, selected)
+    rects = human_card_rects(hand, selected)
     for index, card in enumerate(hand):
-        draw_card(screen, card, rects[index], card_font, index in selected)
-
-
-def draw_table_cards(
-    screen: pygame.Surface,
-    cards: list[Card],
-    card_font: pygame.font.Font,
-) -> None:
-    if not cards:
-        return
-    gap = 7
-    total = CARD_WIDTH * len(cards) + gap * (len(cards) - 1)
-    start_x = (WINDOW_WIDTH - total) // 2
-    for index, card in enumerate(cards):
-        rect = pygame.Rect(start_x + index * (CARD_WIDTH + gap), 270, CARD_WIDTH, CARD_HEIGHT)
-        draw_card(screen, card, rect, card_font)
+        draw_card_front(
+            screen,
+            card,
+            rects[index],
+            fonts,
+            selected=index in selected,
+        )
 
 
 def clicked_card_index(
@@ -182,58 +253,223 @@ def clicked_card_index(
     hand: list[Card],
     selected: set[int],
 ) -> int | None:
-    rects = card_rects(hand, selected)
+    rects = human_card_rects(hand, selected)
     for index in range(len(rects) - 1, -1, -1):
         if rects[index].collidepoint(position):
             return index
     return None
 
 
-def draw_title(
+def cpu_layout(player_count: int) -> dict[int, tuple[int, int, str]]:
+    cpu_count = player_count - 1
+    if cpu_count == 1:
+        return {1: (WINDOW_WIDTH // 2, 155, "top")}
+    if cpu_count == 2:
+        return {
+            1: (145, 325, "left"),
+            2: (WINDOW_WIDTH - 145, 325, "right"),
+        }
+    return {
+        1: (WINDOW_WIDTH // 2, 150, "top"),
+        2: (135, 335, "left"),
+        3: (WINDOW_WIDTH - 135, 335, "right"),
+    }
+
+
+def draw_cpu_back_fan(
     screen: pygame.Surface,
-    title_font: pygame.font.Font,
-    info_font: pygame.font.Font,
-    small_font: pygame.font.Font,
-    button_font: pygame.font.Font,
-    card_font: pygame.font.Font,
+    center: tuple[int, int],
+    orientation: str,
+    count: int,
 ) -> None:
+    visible = min(5, count)
+    back_width = 42
+    back_height = 60
+
+    if orientation == "top":
+        total = back_width + max(0, visible - 1) * 14
+        start_x = center[0] - total // 2
+        for index in range(visible):
+            rect = pygame.Rect(start_x + index * 14, center[1] - 30, back_width, back_height)
+            draw_card_back(screen, rect, draw_shadow=index == visible - 1)
+    else:
+        start_y = center[1] - (back_height + max(0, visible - 1) * 11) // 2
+        x = center[0] - back_width // 2
+        for index in range(visible):
+            rect = pygame.Rect(x, start_y + index * 11, back_width, back_height)
+            draw_card_back(screen, rect, draw_shadow=index == visible - 1)
+
+
+def draw_table_cards(
+    screen: pygame.Surface,
+    cards: list[Card],
+    fonts: CardFonts,
+) -> None:
+    if not cards:
+        return
+    gap = 8
+    total = CARD_WIDTH * len(cards) + gap * (len(cards) - 1)
+    start_x = (WINDOW_WIDTH - total) // 2
+    for index, card in enumerate(cards):
+        rect = pygame.Rect(
+            start_x + index * (CARD_WIDTH + gap),
+            305,
+            CARD_WIDTH,
+            CARD_HEIGHT,
+        )
+        draw_card_front(screen, card, rect, fonts)
+
+
+def animation_start_position(player_index: int, player_count: int) -> tuple[int, int]:
+    if player_index == 0:
+        return WINDOW_WIDTH // 2, WINDOW_HEIGHT - 85
+    x, y, _ = cpu_layout(player_count)[player_index]
+    return x, y
+
+
+def draw_play_animation(
+    screen: pygame.Surface,
+    animation: PlayAnimation,
+    player_count: int,
+    now: int,
+    fonts: CardFonts,
+) -> None:
+    progress = animation.progress(now)
+    eased = 1 - (1 - progress) ** 3
+    start_x, start_y = animation_start_position(animation.player_index, player_count)
+    target_y = 305
+    gap = 8
+    total = CARD_WIDTH * len(animation.cards) + gap * (len(animation.cards) - 1)
+    target_start_x = (WINDOW_WIDTH - total) // 2
+
+    for index, card in enumerate(animation.cards):
+        target_x = target_start_x + index * (CARD_WIDTH + gap)
+        x = int(start_x + (target_x - start_x) * eased)
+        y = int(start_y + (target_y - start_y) * eased)
+        rect = pygame.Rect(x, y, CARD_WIDTH, CARD_HEIGHT)
+        draw_card_front(screen, card, rect, fonts)
+
+
+def draw_title(screen: pygame.Surface, fonts: Fonts) -> None:
     screen.fill(DARK_TABLE_COLOR)
-    draw_text(screen, "大富豪", title_font, WHITE, (WINDOW_WIDTH // 2, 95))
-    draw_text(
-        screen,
-        "好きなローカルルールを選べるCPU対戦ゲーム",
-        info_font,
-        LIGHT_BLUE,
-        (WINDOW_WIDTH // 2, 150),
+    draw_text(screen, "大富豪", fonts.title, WHITE, (WINDOW_WIDTH // 2, 90))
+
+    samples = (
+        Card("♠", "J"),
+        Card("♥", "Q"),
+        Card("♦", "K"),
+        Card("JOKER", "JOKER"),
     )
-    samples = (Card("♠", "3"), Card("♥", "8"), Card("JOKER", "JOKER"), Card("♦", "2"))
-    start_x = WINDOW_WIDTH // 2 - 155
+    start_x = WINDOW_WIDTH // 2 - 180
     for index, card in enumerate(samples):
-        draw_card(
+        draw_card_front(
             screen,
             card,
-            pygame.Rect(start_x + index * 84, 205, CARD_WIDTH, CARD_HEIGHT),
-            card_font,
+            pygame.Rect(start_x + index * 96, 165, CARD_WIDTH, CARD_HEIGHT),
+            fonts.card,
         )
-    panel = pygame.Rect(230, 330, 640, 100)
+
+    draw_button(screen, TITLE_START_RECT, "ゲーム開始", fonts.button)
+    draw_button(screen, TITLE_SETTINGS_RECT, "ゲーム設定", fonts.button)
+    draw_button(screen, TITLE_HELP_RECT, "遊び方", fonts.button)
+    draw_button(screen, TITLE_QUIT_RECT, "終了", fonts.button)
+    draw_text(
+        screen,
+        "Enter：ゲーム開始　　Esc：終了",
+        fonts.small,
+        LIGHT_BLUE,
+        (WINDOW_WIDTH // 2, 705),
+    )
+
+
+def draw_settings_screen(
+    screen: pygame.Surface,
+    settings: AppSettings,
+    fonts: Fonts,
+) -> None:
+    screen.fill(DARK_TABLE_COLOR)
+    draw_text(screen, "ゲーム設定", fonts.heading, WHITE, (WINDOW_WIDTH // 2, 55))
+
+    panel = pygame.Rect(215, 105, 750, 520)
     draw_panel(screen, panel)
+
+    # 項目名の右端をそろえ、ボタンとの間に余白を確保する。
+    label_right = 365
+    draw_text_right(
+        screen,
+        "CPU人数",
+        fonts.info,
+        WHITE,
+        label_right,
+        204,
+    )
+    for count, rect in CPU_COUNT_RECTS.items():
+        draw_button(
+            screen,
+            rect,
+            f"{count}人",
+            fonts.button,
+            selected=settings.cpu_count == count,
+        )
+
+    draw_text_right(
+        screen,
+        "CPU難易度",
+        fonts.info,
+        WHITE,
+        label_right,
+        324,
+    )
+    for key, rect in DIFFICULTY_RECTS.items():
+        draw_button(
+            screen,
+            rect,
+            DIFFICULTY_LABELS[key],
+            fonts.button,
+            selected=settings.cpu_difficulty == key,
+        )
+
+    draw_text_right(
+        screen,
+        "デモモード",
+        fonts.info,
+        WHITE,
+        label_right,
+        431,
+    )
+    demo_label = "ON（特殊札を確認しやすい配札）" if settings.demo_mode else "OFF（通常のランダム配札）"
+    draw_button(
+        screen,
+        DEMO_RECT,
+        demo_label,
+        fonts.small,
+        selected=settings.demo_mode,
+    )
+
+    draw_text_right(
+        screen,
+        "ルールプリセット",
+        fonts.info,
+        WHITE,
+        label_right,
+        554,
+    )
+    for name, rect in PRESET_RECTS.items():
+        label = {"simple": "基本のみ", "standard": "標準", "party": "全部ON"}[name]
+        draw_button(screen, rect, label, fonts.small)
+
+    enabled_count = sum(settings.rules.to_dict().values())
     draw_text(
         screen,
-        "基本ルールから、8切り・革命・縛り・階段・7渡しなどを自由に設定",
-        small_font,
-        WHITE,
-        (WINDOW_WIDTH // 2, 368),
+        f"現在ONのローカルルール：{enabled_count}/{len(RULE_INFOS)}",
+        fonts.small,
+        LIGHT_BLUE,
+        (WINDOW_WIDTH // 2, 603),
     )
-    draw_text(
-        screen,
-        "2戦目以降はカード交換や都落ちも使用できます",
-        small_font,
-        WHITE,
-        (WINDOW_WIDTH // 2, 403),
-    )
-    draw_button(screen, TITLE_START_RECT, "ルールを選んで開始", button_font)
-    draw_button(screen, TITLE_QUIT_RECT, "終了", button_font)
-    draw_text(screen, "Enter：ルール設定", small_font, WHITE, (WINDOW_WIDTH // 2, 680))
+
+    draw_button(screen, SETTINGS_RULES_RECT, "ローカルルール詳細", fonts.button)
+    draw_button(screen, SETTINGS_BACK_RECT, "変更を戻して戻る", fonts.small)
+    draw_button(screen, SETTINGS_SAVE_RECT, "保存してタイトルへ", fonts.small)
 
 
 def rule_checkbox_rects() -> dict[str, pygame.Rect]:
@@ -241,65 +477,90 @@ def rule_checkbox_rects() -> dict[str, pygame.Rect]:
     for index, info in enumerate(RULE_INFOS):
         column = 0 if index < 7 else 1
         row = index if column == 0 else index - 7
-        x = 70 if column == 0 else 570
-        y = 115 + row * 73
-        rects[info.key] = pygame.Rect(x, y, 455, 60)
+        x = 65 if column == 0 else 600
+        y = 105 + row * 82
+        rects[info.key] = pygame.Rect(x, y, 515, 68)
     return rects
 
 
 def draw_rules_screen(
     screen: pygame.Surface,
-    settings: RuleSettings,
-    title_font: pygame.font.Font,
-    info_font: pygame.font.Font,
-    small_font: pygame.font.Font,
-    button_font: pygame.font.Font,
+    settings: AppSettings,
+    fonts: Fonts,
 ) -> None:
     screen.fill(DARK_TABLE_COLOR)
-    draw_text(screen, "ルール設定", title_font, WHITE, (WINDOW_WIDTH // 2, 48))
+    draw_text(screen, "ローカルルール", fonts.heading, WHITE, (WINDOW_WIDTH // 2, 45))
     draw_text(
         screen,
-        "各項目をクリックしてON／OFFを切り替えてください",
-        small_font,
+        "クリックしてON／OFFを切り替えます",
+        fonts.small,
         LIGHT_BLUE,
-        (WINDOW_WIDTH // 2, 84),
+        (WINDOW_WIDTH // 2, 78),
     )
-    rects = rule_checkbox_rects()
+
     mouse = pygame.mouse.get_pos()
     for info in RULE_INFOS:
-        rect = rects[info.key]
-        enabled = bool(getattr(settings, info.key))
-        background = (31, 112, 72) if enabled else (55, 72, 64)
+        rect = rule_checkbox_rects()[info.key]
+        enabled = bool(getattr(settings.rules, info.key))
+        background = (31, 112, 72) if enabled else (53, 70, 62)
         if rect.collidepoint(mouse):
-            background = (40, 130, 83) if enabled else (66, 86, 76)
+            background = (42, 132, 85) if enabled else (65, 84, 74)
         pygame.draw.rect(screen, background, rect, border_radius=10)
         pygame.draw.rect(screen, GREEN if enabled else GRAY, rect, width=2, border_radius=10)
-        status_rect = pygame.Rect(rect.x + 12, rect.y + 13, 62, 34)
-        pygame.draw.rect(screen, GREEN if enabled else GRAY, status_rect, border_radius=7)
-        draw_text(screen, "ON" if enabled else "OFF", small_font, BLACK, status_rect.center)
-        label_surface = info_font.render(info.label, True, WHITE)
-        screen.blit(label_surface, (rect.x + 88, rect.y + 7))
-        description = small_font.render(info.description, True, (220, 230, 225))
-        screen.blit(description, (rect.x + 88, rect.y + 34))
 
-    draw_button(screen, RULE_BACK_RECT, "タイトルへ戻る", button_font)
-    draw_button(screen, PRESET_SIMPLE_RECT, "基本のみ", small_font)
-    draw_button(screen, PRESET_STANDARD_RECT, "標準", small_font)
-    draw_button(screen, PRESET_PARTY_RECT, "全部ON", small_font)
-    draw_button(screen, RULE_START_RECT, "このルールで開始", button_font)
+        status_rect = pygame.Rect(rect.x + 12, rect.y + 17, 62, 34)
+        pygame.draw.rect(screen, GREEN if enabled else GRAY, status_rect, border_radius=7)
+        draw_text(screen, "ON" if enabled else "OFF", fonts.small, BLACK, status_rect.center)
+
+        label = fonts.info.render(info.label, True, WHITE)
+        screen.blit(label, (rect.x + 88, rect.y + 8))
+        description = fonts.tiny.render(info.description, True, (221, 231, 226))
+        screen.blit(description, (rect.x + 88, rect.y + 40))
+
+    draw_button(screen, RULE_BACK_RECT, "設定画面へ戻る", fonts.small)
+    draw_button(screen, RULE_SIMPLE_RECT, "基本のみ", fonts.small)
+    draw_button(screen, RULE_STANDARD_RECT, "標準", fonts.small)
+    draw_button(screen, RULE_ALL_RECT, "全部ON", fonts.small)
+
+
+def draw_help_screen(screen: pygame.Surface, fonts: Fonts) -> None:
+    screen.fill(DARK_TABLE_COLOR)
+    draw_text(screen, "遊び方", fonts.heading, WHITE, (WINDOW_WIDTH // 2, 60))
+    panel = pygame.Rect(180, 115, 820, 565)
+    draw_panel(screen, panel)
+
+    sections = (
+        ("基本操作", "カードをクリックして選択し、「出す」を押します。Pキーでパス、Escで選択解除できます。"),
+        ("基本ルール", "場と同じ枚数・同じ種類で、より強い手を出します。全員がパスすると場が流れます。"),
+        ("設定", "CPUは1〜3人、難易度は3段階です。採用するローカルルールも個別に選べます。"),
+        ("デモモード", "革命・階段・8切り・スペード3返しなどを確認しやすい固定配札で開始します。"),
+        ("カード", "J・Q・K・ジョーカーは、Pygameの図形だけで描いたオリジナルデザインです。"),
+    )
+
+    for index, (heading, body) in enumerate(sections):
+        y = 165 + index * 98
+        heading_surface = fonts.info.render(heading, True, YELLOW)
+        screen.blit(heading_surface, (225, y))
+        body_surface = fonts.small.render(body, True, WHITE)
+        screen.blit(body_surface, (225, y + 35))
+
+    draw_button(screen, HELP_BACK_RECT, "タイトルへ戻る", fonts.button)
 
 
 def draw_game_screen(
     screen: pygame.Surface,
     state: GameState,
-    title_font: pygame.font.Font,
-    info_font: pygame.font.Font,
-    small_font: pygame.font.Font,
-    button_font: pygame.font.Font,
-    card_font: pygame.font.Font,
+    fonts: Fonts,
+    animation: PlayAnimation | None,
 ) -> None:
     screen.fill(TABLE_COLOR)
-    draw_text(screen, f"大富豪　第{state.session.round_number}戦", title_font, WHITE, (WINDOW_WIDTH // 2, 33))
+    draw_text(
+        screen,
+        f"大富豪　第{state.session.round_number}戦",
+        fonts.heading,
+        WHITE,
+        (WINDOW_WIDTH // 2, 31),
+    )
 
     if state.pending_display:
         turn_text = "8切り発動！" if state.pending_display.effect == "eight_cut" else "スペード3返し！"
@@ -310,49 +571,91 @@ def draw_game_screen(
     elif state.game_over:
         turn_text = "ゲーム終了"
         turn_color = YELLOW
+    elif animation is not None:
+        turn_text = f"{PLAYER_NAMES[animation.player_index]}がカードを出しました"
+        turn_color = LIGHT_BLUE
     else:
         turn_text = f"現在の番：{PLAYER_NAMES[state.current_player]}"
         turn_color = LIGHT_BLUE
-    draw_text(screen, turn_text, info_font, turn_color, (WINDOW_WIDTH // 2, 68))
+
+    draw_text(screen, turn_text, fonts.info, turn_color, (WINDOW_WIDTH // 2, 70))
 
     statuses = state_status_lines(state)
-    draw_text(screen, " / ".join(statuses), small_font, YELLOW if len(statuses) > 1 else WHITE, (165, 68))
+    draw_text(
+        screen,
+        " / ".join(statuses),
+        fonts.small,
+        YELLOW if len(statuses) > 1 else WHITE,
+        (160, 70),
+    )
 
-    cpu_positions = ((WINDOW_WIDTH // 2, 108), (125, 335), (WINDOW_WIDTH - 125, 335))
-    for player, position in zip((1, 2, 3), cpu_positions):
-        if player in state.rankings:
-            status = f"{state.rankings.index(player) + 1}位"
-        elif player in state.penalty_players:
+    settings_text = (
+        f"CPU{state.session.player_count - 1}人・"
+        f"{DIFFICULTY_LABELS[state.session.cpu_difficulty]}"
+    )
+    if state.session.demo_mode:
+        settings_text += "・デモ"
+    draw_text(screen, settings_text, fonts.tiny, LIGHT_BLUE, (1015, 70))
+
+    layout = cpu_layout(len(state.hands))
+    for player_index, (x, y, orientation) in layout.items():
+        if player_index in state.rankings:
+            status = f"{state.rankings.index(player_index) + 1}位"
+        elif player_index in state.penalty_players:
             status = "ペナルティ"
-        elif player in state.passed_players:
+        elif player_index in state.passed_players:
             status = "パス中"
         else:
-            status = f"残り{len(state.hands[player])}枚"
-        draw_text(screen, f"{PLAYER_NAMES[player]}：{status}", info_font, WHITE, position)
+            status = f"残り{len(state.hands[player_index])}枚"
 
-    draw_text(screen, table_description(state), info_font, WHITE, (WINDOW_WIDTH // 2, 225))
-    draw_table_cards(screen, state.table_cards, card_font)
+        label_y = y - 62 if orientation == "top" else y - 70
+        draw_text(
+            screen,
+            f"{PLAYER_NAMES[player_index]}：{status}",
+            fonts.small,
+            WHITE,
+            (x, label_y),
+        )
+        draw_cpu_back_fan(screen, (x, y), orientation, len(state.hands[player_index]))
+
+    draw_text(screen, table_description(state), fonts.info, WHITE, (WINDOW_WIDTH // 2, 255))
+    if animation is None:
+        draw_table_cards(screen, state.table_cards, fonts.card)
 
     message = state.message
-    if len(message) > 52:
-        message = message[:51] + "…"
-    draw_text(screen, message, small_font, YELLOW, (WINDOW_WIDTH // 2, 405))
+    if len(message) > 64:
+        message = message[:63] + "…"
+    draw_text(screen, message, fonts.small, YELLOW, (WINDOW_WIDTH // 2, 455))
 
     human_turn = (
         not state.game_over
         and state.current_player == 0
         and state.pending_display is None
         and state.pending_selection is None
+        and animation is None
         and bool(state.hands[0])
     )
+
     if state.pending_selection and state.pending_selection.source_player == 0:
         action_label = "渡す" if state.pending_selection.action == "give" else "捨てる"
         confirm_enabled = len(state.selected_indices) == state.pending_selection.count
-        draw_button(screen, PLAY_RECT, action_label, button_font, confirm_enabled)
-        draw_button(screen, PASS_RECT, "選択解除", button_font, bool(state.selected_indices))
+        draw_button(screen, PLAY_RECT, action_label, fonts.button, confirm_enabled)
+        draw_button(screen, PASS_RECT, "選択解除", fonts.button, bool(state.selected_indices))
     else:
-        draw_button(screen, PLAY_RECT, "出す", button_font, human_turn and bool(state.selected_indices))
-        draw_button(screen, PASS_RECT, "パス", button_font, human_turn and state.table_pattern is not None)
+        draw_button(
+            screen,
+            PLAY_RECT,
+            "出す",
+            fonts.button,
+            human_turn and bool(state.selected_indices),
+        )
+        draw_button(
+            screen,
+            PASS_RECT,
+            "パス",
+            fonts.button,
+            human_turn and state.table_pattern is not None,
+        )
 
     if 0 in state.rankings:
         human_status = f"{state.rankings.index(0) + 1}位"
@@ -360,52 +663,67 @@ def draw_game_screen(
         human_status = "ペナルティ"
     else:
         human_status = f"残り{len(state.hands[0])}枚"
-    draw_text(screen, f"あなた：{human_status}", info_font, WHITE, (WINDOW_WIDTH // 2, 570))
+
+    draw_text(screen, f"あなた：{human_status}", fonts.info, WHITE, (WINDOW_WIDTH // 2, 625))
 
     if state.pending_selection and state.pending_selection.source_player == 0:
-        selection_text = f"{state.pending_selection.prompt}（{len(state.selected_indices)}/{state.pending_selection.count}）"
+        selection_text = (
+            f"{state.pending_selection.prompt}"
+            f"（{len(state.selected_indices)}/{state.pending_selection.count}）"
+        )
     else:
         selection_text = f"選択中：{len(state.selected_indices)}枚"
-    draw_text(screen, selection_text, small_font, YELLOW, (WINDOW_WIDTH // 2, 600))
-    draw_hand(screen, state.hands[0], state.selected_indices, card_font)
+
+    draw_text(screen, selection_text, fonts.small, YELLOW, (WINDOW_WIDTH // 2, 653))
+    draw_human_hand(screen, state.hands[0], state.selected_indices, fonts.card)
 
     for place, player in enumerate(state.rankings, 1):
-        draw_text(screen, f"{place}位：{PLAYER_NAMES[player]}", small_font, WHITE, (985, 65 + place * 25))
+        draw_text(
+            screen,
+            f"{place}位：{PLAYER_NAMES[player]}",
+            fonts.tiny,
+            WHITE,
+            (1080, 105 + place * 24),
+        )
 
 
-def draw_result_screen(
-    screen: pygame.Surface,
-    state: GameState,
-    title_font: pygame.font.Font,
-    info_font: pygame.font.Font,
-    small_font: pygame.font.Font,
-    button_font: pygame.font.Font,
-) -> None:
+def draw_result_screen(screen: pygame.Surface, state: GameState, fonts: Fonts) -> None:
     screen.fill(DARK_TABLE_COLOR)
-    draw_text(screen, f"第{state.session.round_number}戦　結果", title_font, YELLOW, (WINDOW_WIDTH // 2, 70))
+    draw_text(
+        screen,
+        f"第{state.session.round_number}戦　結果",
+        fonts.heading,
+        YELLOW,
+        (WINDOW_WIDTH // 2, 65),
+    )
+
     human_place = state.rankings.index(0) + 1
-    draw_text(screen, f"あなたは{human_place}位（{RANK_TITLES[human_place - 1]}）でした", info_font, WHITE, (WINDOW_WIDTH // 2, 120))
-    panel = pygame.Rect(285, 160, 530, 335)
+    titles = rank_titles_for(len(state.hands))
+    draw_text(
+        screen,
+        f"あなたは{human_place}位（{titles[human_place - 1]}）でした",
+        fonts.info,
+        WHITE,
+        (WINDOW_WIDTH // 2, 112),
+    )
+
+    row_height = 82
+    panel_height = 70 + row_height * len(state.rankings)
+    panel = pygame.Rect(300, 150, 580, panel_height)
     draw_panel(screen, panel)
+
     for place, player in enumerate(state.rankings, 1):
         color = YELLOW if player == 0 else WHITE
         draw_text(
             screen,
-            f"{place}位　{RANK_TITLES[place - 1]}　{PLAYER_NAMES[player]}",
-            info_font,
+            f"{place}位　{titles[place - 1]}　{PLAYER_NAMES[player]}",
+            fonts.info,
             color,
-            (WINDOW_WIDTH // 2, 205 + (place - 1) * 70),
+            (WINDOW_WIDTH // 2, 195 + (place - 1) * row_height),
         )
-    next_label = "次のラウンドへ（階級を引き継ぐ）"
-    draw_button(screen, RESULT_NEXT_RECT, next_label, button_font)
-    draw_button(screen, RESULT_RESET_RECT, "タイトルへ戻る", button_font)
-    if state.rules.card_exchange:
-        note = "次戦では階級に応じたカード交換が自動で行われます"
-    elif state.rules.capital_fall:
-        note = "次戦から都落ちの判定が有効になります"
-    else:
-        note = "次戦も同じルールで新しくカードを配ります"
-    draw_text(screen, note, small_font, LIGHT_BLUE, (WINDOW_WIDTH // 2, 720))
+
+    draw_button(screen, RESULT_NEXT_RECT, "次のラウンドへ", fonts.button)
+    draw_button(screen, RESULT_TITLE_RECT, "タイトルへ戻る", fonts.button)
 
 
 def toggle_card_selection(state: GameState, position: tuple[int, int]) -> None:
@@ -418,38 +736,54 @@ def toggle_card_selection(state: GameState, position: tuple[int, int]) -> None:
         state.selected_indices.add(index)
 
 
-def handle_play_or_confirm(state: GameState) -> None:
+def handle_play_or_confirm(
+    state: GameState,
+    now: int,
+) -> PlayAnimation | None:
     if state.pending_selection and state.pending_selection.source_player == 0:
         success, message = confirm_pending_selection(state, state.selected_indices)
         if not success:
             state.message = message
-        return
+        return None
+
     cards = [state.hands[0][index] for index in sorted(state.selected_indices)]
     success, message = play_cards(state, 0, cards)
     if not success:
         state.message = message
+        return None
+
+    return PlayAnimation(list(state.table_cards), 0, now)
+
+
+def start_game(settings: AppSettings, now: int) -> tuple[GameSession, GameState]:
+    session = GameSession(
+        settings.rules.copy(),
+        player_count=settings.player_count,
+        cpu_difficulty=settings.cpu_difficulty,
+        demo_mode=settings.demo_mode,
+    )
+    return session, create_game(session, now)
 
 
 def main() -> None:
     pygame.init()
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption("ルールを選べる大富豪")
+    pygame.display.set_caption("大富豪")
+    fonts = create_fonts()
 
-    title_font = create_font(40, True)
-    info_font = create_font(20, True)
-    small_font = create_font(15, False)
-    button_font = create_font(20, True)
-    card_font = create_font(22, True)
-
+    settings = load_settings(SETTINGS_PATH)
+    editing_settings: AppSettings | None = None
     mode = "title"
-    settings = RuleSettings.from_preset("standard")
     session: GameSession | None = None
     state: GameState | None = None
+    animation: PlayAnimation | None = None
+
     clock = pygame.time.Clock()
     running = True
 
     while running:
         now = pygame.time.get_ticks()
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -458,50 +792,117 @@ def main() -> None:
             if mode == "title":
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     if TITLE_START_RECT.collidepoint(event.pos):
-                        mode = "rules"
+                        session, state = start_game(settings, now)
+                        animation = None
+                        mode = "game"
+                    elif TITLE_SETTINGS_RECT.collidepoint(event.pos):
+                        editing_settings = AppSettings.from_dict(settings.to_dict())
+                        mode = "settings"
+                    elif TITLE_HELP_RECT.collidepoint(event.pos):
+                        mode = "help"
                     elif TITLE_QUIT_RECT.collidepoint(event.pos):
                         running = False
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_RETURN:
-                        mode = "rules"
+                        session, state = start_game(settings, now)
+                        animation = None
+                        mode = "game"
                     elif event.key == pygame.K_ESCAPE:
                         running = False
 
-            elif mode == "rules":
+            elif mode == "settings":
+                if editing_settings is None:
+                    editing_settings = AppSettings.from_dict(settings.to_dict())
+
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    hit = False
+                    handled = False
+                    for count, rect in CPU_COUNT_RECTS.items():
+                        if rect.collidepoint(event.pos):
+                            editing_settings.cpu_count = count
+                            handled = True
+                            break
+                    if handled:
+                        continue
+
+                    for difficulty, rect in DIFFICULTY_RECTS.items():
+                        if rect.collidepoint(event.pos):
+                            editing_settings.cpu_difficulty = difficulty
+                            handled = True
+                            break
+                    if handled:
+                        continue
+
+                    if DEMO_RECT.collidepoint(event.pos):
+                        editing_settings.demo_mode = not editing_settings.demo_mode
+                    elif PRESET_RECTS["simple"].collidepoint(event.pos):
+                        editing_settings.rules = RuleSettings.from_preset("simple")
+                    elif PRESET_RECTS["standard"].collidepoint(event.pos):
+                        editing_settings.rules = RuleSettings.from_preset("standard")
+                    elif PRESET_RECTS["party"].collidepoint(event.pos):
+                        editing_settings.rules = RuleSettings.from_preset("party")
+                    elif SETTINGS_RULES_RECT.collidepoint(event.pos):
+                        mode = "rules"
+                    elif SETTINGS_BACK_RECT.collidepoint(event.pos):
+                        editing_settings = None
+                        mode = "title"
+                    elif SETTINGS_SAVE_RECT.collidepoint(event.pos):
+                        settings = editing_settings
+                        save_settings(SETTINGS_PATH, settings)
+                        editing_settings = None
+                        mode = "title"
+
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    editing_settings = None
+                    mode = "title"
+
+            elif mode == "rules":
+                if editing_settings is None:
+                    editing_settings = AppSettings.from_dict(settings.to_dict())
+
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    hit_rule = False
                     for key, rect in rule_checkbox_rects().items():
                         if rect.collidepoint(event.pos):
-                            setattr(settings, key, not bool(getattr(settings, key)))
-                            # スペード3返しにはジョーカーが必要。
-                            if key == "spade_three_return" and settings.spade_three_return:
-                                settings.joker = True
-                            if key == "joker" and not settings.joker:
-                                settings.spade_three_return = False
-                            hit = True
+                            setattr(
+                                editing_settings.rules,
+                                key,
+                                not bool(getattr(editing_settings.rules, key)),
+                            )
+                            if key == "spade_three_return" and editing_settings.rules.spade_three_return:
+                                editing_settings.rules.joker = True
+                            if key == "joker" and not editing_settings.rules.joker:
+                                editing_settings.rules.spade_three_return = False
+                            hit_rule = True
                             break
-                    if hit:
+                    if hit_rule:
                         continue
+
                     if RULE_BACK_RECT.collidepoint(event.pos):
+                        mode = "settings"
+                    elif RULE_SIMPLE_RECT.collidepoint(event.pos):
+                        editing_settings.rules = RuleSettings.from_preset("simple")
+                    elif RULE_STANDARD_RECT.collidepoint(event.pos):
+                        editing_settings.rules = RuleSettings.from_preset("standard")
+                    elif RULE_ALL_RECT.collidepoint(event.pos):
+                        editing_settings.rules = RuleSettings.from_preset("party")
+
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    mode = "settings"
+
+            elif mode == "help":
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if HELP_BACK_RECT.collidepoint(event.pos):
                         mode = "title"
-                    elif PRESET_SIMPLE_RECT.collidepoint(event.pos):
-                        settings = RuleSettings.from_preset("simple")
-                    elif PRESET_STANDARD_RECT.collidepoint(event.pos):
-                        settings = RuleSettings.from_preset("standard")
-                    elif PRESET_PARTY_RECT.collidepoint(event.pos):
-                        settings = RuleSettings.from_preset("party")
-                    elif RULE_START_RECT.collidepoint(event.pos):
-                        session = GameSession(settings.copy())
-                        state = create_game(session, now)
-                        mode = "game"
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     mode = "title"
 
             elif mode == "game":
                 if state is None:
                     raise RuntimeError("ゲーム状態がありません。")
+
                 can_touch_hand = (
-                    state.current_player == 0
+                    animation is None
+                    and state.current_player == 0
                     and not state.game_over
                     and state.pending_display is None
                     and (
@@ -509,9 +910,12 @@ def main() -> None:
                         or state.pending_selection.source_player == 0
                     )
                 )
+
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if animation is not None:
+                        continue
                     if PLAY_RECT.collidepoint(event.pos):
-                        handle_play_or_confirm(state)
+                        animation = handle_play_or_confirm(state, now)
                     elif PASS_RECT.collidepoint(event.pos):
                         if state.pending_selection and state.pending_selection.source_player == 0:
                             state.selected_indices.clear()
@@ -521,11 +925,12 @@ def main() -> None:
                                 state.message = message
                     elif can_touch_hand:
                         toggle_card_selection(state, event.pos)
+
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         state.selected_indices.clear()
                     elif event.key == pygame.K_RETURN and can_touch_hand:
-                        handle_play_or_confirm(state)
+                        animation = handle_play_or_confirm(state, now)
                     elif event.key == pygame.K_p and can_touch_hand and state.pending_selection is None:
                         success, message = pass_turn(state, 0)
                         if not success:
@@ -538,64 +943,113 @@ def main() -> None:
                     if RESULT_NEXT_RECT.collidepoint(event.pos):
                         session.round_number += 1
                         state = create_game(session, now)
+                        animation = None
                         mode = "game"
-                    elif RESULT_RESET_RECT.collidepoint(event.pos):
+                    elif RESULT_TITLE_RECT.collidepoint(event.pos):
                         state = None
                         session = None
+                        animation = None
                         mode = "title"
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_RETURN:
                         session.round_number += 1
                         state = create_game(session, now)
+                        animation = None
                         mode = "game"
                     elif event.key == pygame.K_ESCAPE:
                         state = None
                         session = None
+                        animation = None
                         mode = "title"
 
         if mode == "game" and state is not None:
-            if state.turn_started_at == 0:
-                state.turn_started_at = now
-
-            if state.pending_display is not None:
-                pending = state.pending_display
-                if pending.started_at is not None and now - pending.started_at >= pending.duration_ms:
-                    resolve_pending_display(state)
-                    state.turn_started_at = now
-            elif (
-                not state.game_over
-                and state.pending_selection is None
-                and state.current_player != 0
-                and now - state.turn_started_at >= CPU_TURN_DELAY_MS
-            ):
-                process_cpu_turn(state)
+            if animation is not None and animation.finished(now):
+                animation = None
                 if state.turn_started_at == 0:
                     state.turn_started_at = now
 
-            if state.game_over and state.pending_display is None and state.pending_selection is None:
+            if animation is None:
+                if state.turn_started_at == 0:
+                    state.turn_started_at = now
+
+                if state.pending_display is not None:
+                    pending = state.pending_display
+                    if pending.started_at is not None and now - pending.started_at >= pending.duration_ms:
+                        resolve_pending_display(state)
+                        state.turn_started_at = now
+                elif (
+                    not state.game_over
+                    and state.pending_selection is None
+                    and state.current_player != 0
+                    and now - state.turn_started_at >= {
+                        "easy": 950,
+                        "normal": 780,
+                        "hard": 650,
+                    }[state.session.cpu_difficulty]
+                ):
+                    cpu_player = state.current_player
+                    before_count = len(state.hands[cpu_player])
+                    process_cpu_turn(state)
+                    if (
+                        len(state.hands[cpu_player]) < before_count
+                        and state.last_played_player == cpu_player
+                        and state.table_cards
+                    ):
+                        animation = PlayAnimation(list(state.table_cards), cpu_player, now)
+                    if state.turn_started_at == 0:
+                        state.turn_started_at = now
+
+            if (
+                state.game_over
+                and animation is None
+                and state.pending_display is None
+                and state.pending_selection is None
+            ):
                 mode = "result"
 
         if mode == "title":
-            draw_title(screen, title_font, info_font, small_font, button_font, card_font)
+            draw_title(screen, fonts)
+        elif mode == "settings":
+            if editing_settings is None:
+                editing_settings = AppSettings.from_dict(settings.to_dict())
+            draw_settings_screen(screen, editing_settings, fonts)
         elif mode == "rules":
-            draw_rules_screen(screen, settings, title_font, info_font, small_font, button_font)
+            if editing_settings is None:
+                editing_settings = AppSettings.from_dict(settings.to_dict())
+            draw_rules_screen(screen, editing_settings, fonts)
+        elif mode == "help":
+            draw_help_screen(screen, fonts)
         elif mode == "game":
             if state is None:
                 raise RuntimeError("ゲーム状態がありません。")
-            draw_game_screen(screen, state, title_font, info_font, small_font, button_font, card_font)
+            draw_game_screen(screen, state, fonts, animation)
+            if animation is not None:
+                draw_play_animation(
+                    screen,
+                    animation,
+                    len(state.hands),
+                    now,
+                    fonts.card,
+                )
         else:
             if state is None:
                 raise RuntimeError("ゲーム結果がありません。")
-            draw_result_screen(screen, state, title_font, info_font, small_font, button_font)
+            draw_result_screen(screen, state, fonts)
 
         pygame.display.flip()
 
-        if mode == "game" and state is not None and state.pending_display is not None:
-            if state.pending_display.started_at is None:
-                state.pending_display.started_at = pygame.time.get_ticks()
+        if (
+            mode == "game"
+            and state is not None
+            and animation is None
+            and state.pending_display is not None
+            and state.pending_display.started_at is None
+        ):
+            state.pending_display.started_at = pygame.time.get_ticks()
 
         clock.tick(FPS)
 
+    save_settings(SETTINGS_PATH, settings)
     pygame.quit()
 
 
