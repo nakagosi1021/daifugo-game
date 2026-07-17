@@ -10,6 +10,18 @@ from rules import RuleSettings
 
 PLAYER_NAMES: tuple[str, ...] = ("あなた", "CPU1", "CPU2", "CPU3")
 RANK_TITLES: tuple[str, ...] = ("大富豪", "富豪", "貧民", "大貧民")
+CPU_DIFFICULTIES: tuple[str, ...] = ("easy", "normal", "hard")
+
+
+def rank_titles_for(player_count: int) -> tuple[str, ...]:
+    """参加人数に応じた階級名を返す。"""
+    if player_count == 2:
+        return ("大富豪", "大貧民")
+    if player_count == 3:
+        return ("大富豪", "平民", "大貧民")
+    if player_count == 4:
+        return RANK_TITLES
+    raise ValueError("参加人数は2〜4人にしてください。")
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,8 +87,17 @@ class PostPlayContext:
 @dataclass(slots=True)
 class GameSession:
     rules: RuleSettings
+    player_count: int = 4
+    cpu_difficulty: str = "normal"
+    demo_mode: bool = False
     round_number: int = 1
     previous_rankings: list[int] | None = None
+
+    def __post_init__(self) -> None:
+        if self.player_count not in (2, 3, 4):
+            raise ValueError("参加人数は2〜4人にしてください。")
+        if self.cpu_difficulty not in CPU_DIFFICULTIES:
+            raise ValueError("CPU難易度が不正です。")
 
     def reset(self, rules: RuleSettings | None = None) -> None:
         if rules is not None:
@@ -343,22 +364,36 @@ def _transfer_cards(hands: list[list[Card]], source: int, target: int, cards: li
     hands[target].sort(key=card_sort_key)
 
 
-def apply_automatic_exchange(hands: list[list[Card]], previous_rankings: list[int]) -> list[str]:
-    """課題向けに交換を自動化。貧しい側は最強、富裕側は最弱を渡す。"""
+def apply_automatic_exchange(
+    hands: list[list[Card]],
+    previous_rankings: list[int],
+) -> list[str]:
+    """参加人数に応じて階級カード交換を自動処理する。"""
+    player_count = len(previous_rankings)
+
+    if player_count not in (2, 3, 4):
+        return []
+
     messages: list[str] = []
-    daifugo, fugo, hinmin, daihinmin = previous_rankings
+    richest = previous_rankings[0]
+    poorest = previous_rankings[-1]
 
-    poor_to_rich = _strongest_cards(hands[daihinmin], 2)
-    rich_to_poor = _weakest_cards(hands[daifugo], 2)
-    _transfer_cards(hands, daihinmin, daifugo, poor_to_rich)
-    _transfer_cards(hands, daifugo, daihinmin, rich_to_poor)
-    messages.append("大富豪と大貧民が2枚交換")
+    exchange_count = min(2, len(hands[richest]), len(hands[poorest]))
+    poor_to_rich = _strongest_cards(hands[poorest], exchange_count)
+    rich_to_poor = _weakest_cards(hands[richest], exchange_count)
+    _transfer_cards(hands, poorest, richest, poor_to_rich)
+    _transfer_cards(hands, richest, poorest, rich_to_poor)
+    messages.append(f"大富豪と大貧民が{exchange_count}枚交換")
 
-    poor_to_rich = _strongest_cards(hands[hinmin], 1)
-    rich_to_poor = _weakest_cards(hands[fugo], 1)
-    _transfer_cards(hands, hinmin, fugo, poor_to_rich)
-    _transfer_cards(hands, fugo, hinmin, rich_to_poor)
-    messages.append("富豪と貧民が1枚交換")
+    if player_count == 4:
+        fugo = previous_rankings[1]
+        hinmin = previous_rankings[2]
+        poor_to_rich = _strongest_cards(hands[hinmin], 1)
+        rich_to_poor = _weakest_cards(hands[fugo], 1)
+        _transfer_cards(hands, hinmin, fugo, poor_to_rich)
+        _transfer_cards(hands, fugo, hinmin, rich_to_poor)
+        messages.append("富豪と貧民が1枚交換")
+
     return messages
 
 
@@ -370,25 +405,142 @@ def find_start_player(hands: list[list[Card]]) -> int:
     raise RuntimeError("♦3を持つプレイヤーが見つかりません。")
 
 
+def _take_demo_card(pool: list[Card], suit: str, rank: str) -> Card | None:
+    for card in pool:
+        if card.suit == suit and card.rank == rank:
+            pool.remove(card)
+            return card
+    return None
+
+
+def _create_demo_hands(
+    player_count: int,
+    include_joker: bool,
+) -> list[list[Card]]:
+    """代表ルールを確認しやすい固定配札を作る。"""
+    deck = Deck(include_joker=include_joker)
+    pool = deck.cards.copy()
+    hands: list[list[Card]] = [[] for _ in range(player_count)]
+
+    human_cards = (
+        ("♦", "3"),
+        ("♠", "3"),
+        ("♠", "5"),
+        ("♠", "6"),
+        ("♠", "7"),
+        ("♥", "8"),
+        ("♠", "9"),
+        ("♥", "9"),
+        ("♦", "9"),
+        ("♣", "9"),
+        ("♣", "10"),
+        ("♦", "J"),
+    )
+
+    for suit, rank in human_cards:
+        card = _take_demo_card(pool, suit, rank)
+        if card is not None:
+            hands[0].append(card)
+
+    if player_count >= 2:
+        cpu_one_cards = (
+            ("♥", "4"),
+            ("♥", "5"),
+            ("♥", "6"),
+            ("♣", "2"),
+        )
+        for suit, rank in cpu_one_cards:
+            card = _take_demo_card(pool, suit, rank)
+            if card is not None:
+                hands[1].append(card)
+
+        if include_joker:
+            joker = _take_demo_card(pool, "JOKER", "JOKER")
+            if joker is not None:
+                hands[1].append(joker)
+
+    if player_count >= 3:
+        cpu_two_cards = (
+            ("♣", "3"),
+            ("♦", "7"),
+            ("♦", "8"),
+            ("♠", "2"),
+        )
+        for suit, rank in cpu_two_cards:
+            card = _take_demo_card(pool, suit, rank)
+            if card is not None:
+                hands[2].append(card)
+
+    if player_count >= 4:
+        cpu_three_cards = (
+            ("♣", "5"),
+            ("♣", "6"),
+            ("♣", "7"),
+            ("♥", "2"),
+        )
+        for suit, rank in cpu_three_cards:
+            card = _take_demo_card(pool, suit, rank)
+            if card is not None:
+                hands[3].append(card)
+
+    random.Random(20260717).shuffle(pool)
+    total_cards = sum(len(hand) for hand in hands) + len(pool)
+    base_size, remainder = divmod(total_cards, player_count)
+    target_sizes = [
+        base_size + (1 if index < remainder else 0)
+        for index in range(player_count)
+    ]
+
+    for player_index, target_size in enumerate(target_sizes):
+        while len(hands[player_index]) < target_size and pool:
+            hands[player_index].append(pool.pop())
+
+    while pool:
+        smallest = min(range(player_count), key=lambda index: len(hands[index]))
+        hands[smallest].append(pool.pop())
+
+    for hand in hands:
+        hand.sort(key=card_sort_key)
+
+    return hands
+
+
 def create_game(session: GameSession, now_ms: int = 0) -> GameState:
-    deck = Deck(include_joker=session.rules.joker)
-    deck.shuffle()
-    hands = deck.deal(4)
+    if session.demo_mode:
+        hands = _create_demo_hands(
+            session.player_count,
+            include_joker=session.rules.joker,
+        )
+    else:
+        deck = Deck(include_joker=session.rules.joker)
+        deck.shuffle()
+        hands = deck.deal(session.player_count)
 
     exchange_messages: list[str] = []
     if (
-        session.rules.card_exchange
+        not session.demo_mode
+        and session.rules.card_exchange
         and session.previous_rankings is not None
-        and len(session.previous_rankings) == 4
+        and len(session.previous_rankings) == session.player_count
     ):
-        exchange_messages = apply_automatic_exchange(hands, session.previous_rankings)
+        exchange_messages = apply_automatic_exchange(
+            hands,
+            session.previous_rankings,
+        )
 
     current_player = find_start_player(hands)
-    prefix = "／".join(exchange_messages)
+    prefix_parts = exchange_messages.copy()
+
+    if session.demo_mode:
+        prefix_parts.append("デモ配札")
+
+    prefix = "／".join(prefix_parts)
     if prefix:
         prefix += "。"
+
     message = (
-        f"{prefix}{PLAYER_NAMES[current_player]}が♦3を持っています。ここから開始します"
+        f"{prefix}{PLAYER_NAMES[current_player]}が♦3を持っています。"
+        "ここから開始します"
     )
 
     return GameState(
@@ -871,30 +1023,123 @@ def generate_cpu_candidates(state: GameState, player_index: int) -> list[list[Ca
     return list(unique.values())
 
 
+def _normal_cpu_score(
+    state: GameState,
+    item: tuple[list[Card], PlayPattern],
+) -> tuple[int, int, int, int]:
+    cards, pattern = item
+    joker_penalty = 1 if pattern.is_single_joker else 0
+    special_bonus = 0
+
+    if state.table_pattern is None:
+        if state.rules.revolution and _revolution_trigger(pattern):
+            special_bonus -= 3
+        if pattern.kind == "straight":
+            special_bonus -= 1
+
+    strength = -pattern.strength if state.effective_reverse else pattern.strength
+    count_score = -pattern.count if state.table_pattern is None else pattern.count
+    return joker_penalty, special_bonus, count_score, strength
+
+
+def _hard_cpu_score(
+    state: GameState,
+    player_index: int,
+    item: tuple[list[Card], PlayPattern],
+) -> tuple[int, int, int, int, int, int]:
+    cards, pattern = item
+    remaining = len(state.hands[player_index]) - len(cards)
+    opponent_counts = [
+        len(hand)
+        for index, hand in enumerate(state.hands)
+        if index != player_index
+        and index not in state.rankings
+        and index not in state.penalty_players
+        and hand
+    ]
+    nearest_opponent = min(opponent_counts, default=99)
+
+    finishing_bonus = -100 if remaining == 0 else 0
+    clear_bonus = 0
+
+    if state.rules.eight_cut and pattern.represents_rank("8"):
+        clear_bonus -= 12
+
+    if (
+        state.rules.spade_three_return
+        and state.table_pattern is not None
+        and is_spade_three_return(pattern, state.table_pattern, state.rules)
+    ):
+        clear_bonus -= 20
+
+    skip_bonus = 0
+    if state.rules.five_skip:
+        skip_bonus -= pattern.effect_count("5") * 2
+    if nearest_opponent <= 3:
+        skip_bonus *= 2
+
+    revolution_bonus = 0
+    if state.rules.revolution and _revolution_trigger(pattern):
+        low_cards = sum(
+            1
+            for card in state.hands[player_index]
+            if not card.is_joker and card.rank_value <= RANKS.index("6")
+        )
+        high_cards = sum(
+            1
+            for card in state.hands[player_index]
+            if card.is_joker or card.rank_value >= RANKS.index("K")
+        )
+        if state.revolution:
+            revolution_bonus = -4 if high_cards > low_cards else 3
+        else:
+            revolution_bonus = -4 if low_cards > high_cards else 3
+
+    joker_penalty = 0
+    if any(card.is_joker for card in cards):
+        joker_penalty = 0 if remaining <= 1 or nearest_opponent <= 1 else 10
+
+    # 場が空なら複数枚をまとめて減らし、競り中は最小限の強さで勝つ。
+    count_score = -pattern.count if state.table_pattern is None else pattern.count
+    strength = -pattern.strength if state.effective_reverse else pattern.strength
+
+    return (
+        finishing_bonus,
+        clear_bonus,
+        skip_bonus,
+        revolution_bonus,
+        joker_penalty,
+        count_score * 20 + strength,
+    )
+
+
 def choose_cpu_play(state: GameState, player_index: int) -> list[Card]:
     legal: list[tuple[list[Card], PlayPattern]] = []
+
     for cards in generate_cpu_candidates(state, player_index):
         valid, _, pattern = validate_play(state, player_index, cards)
         if valid and pattern is not None:
             legal.append((cards, pattern))
+
     if not legal:
         return []
 
-    def score(item: tuple[list[Card], PlayPattern]) -> tuple[int, int, int, int]:
-        cards, pattern = item
-        joker_penalty = 1 if pattern.is_single_joker else 0
-        special_bonus = 0
-        if state.table_pattern is None:
-            if state.rules.revolution and _revolution_trigger(pattern):
-                special_bonus -= 3
-            if pattern.kind == "straight":
-                special_bonus -= 1
-        strength = -pattern.strength if state.effective_reverse else pattern.strength
-        # 場が空なら枚数を多く、競り中は必要最小限の強さを優先。
-        count_score = -pattern.count if state.table_pattern is None else pattern.count
-        return joker_penalty, special_bonus, count_score, strength
+    difficulty = state.session.cpu_difficulty
 
-    legal.sort(key=score)
+    if difficulty == "easy":
+        return random.choice(legal)[0]
+
+    if difficulty == "hard":
+        legal.sort(
+            key=lambda item: _hard_cpu_score(
+                state,
+                player_index,
+                item,
+            )
+        )
+        return legal[0][0]
+
+    legal.sort(key=lambda item: _normal_cpu_score(state, item))
     return legal[0][0]
 
 

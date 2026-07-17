@@ -59,10 +59,12 @@ SETTINGS_BACK_RECT = pygame.Rect(75, 730, 220, 55)
 SETTINGS_RULES_RECT = pygame.Rect(430, 645, 320, 55)
 SETTINGS_SAVE_RECT = pygame.Rect(850, 730, 255, 55)
 
-RULE_BACK_RECT = pygame.Rect(75, 735, 220, 52)
-RULE_SIMPLE_RECT = pygame.Rect(390, 735, 125, 52)
-RULE_STANDARD_RECT = pygame.Rect(530, 735, 135, 52)
-RULE_ALL_RECT = pygame.Rect(680, 735, 125, 52)
+RULE_BACK_RECT = pygame.Rect(75, 742, 220, 48)
+RULE_SIMPLE_RECT = pygame.Rect(360, 742, 125, 48)
+RULE_STANDARD_RECT = pygame.Rect(500, 742, 160, 48)
+RULE_ALL_RECT = pygame.Rect(675, 742, 125, 48)
+RULE_SAVE_STANDARD_RECT = pygame.Rect(275, 682, 300, 44)
+RULE_RESET_STANDARD_RECT = pygame.Rect(605, 682, 300, 44)
 
 HELP_BACK_RECT = pygame.Rect(455, 735, 270, 52)
 
@@ -564,24 +566,45 @@ def draw_settings_screen(
     )
     draw_text_left(
         screen,
-        "代表的な組み合わせを一度に選択",
+        "標準はローカルルール詳細で自由に登録できます",
         fonts.tiny,
         (196, 222, 209),
         label_x,
         540,
     )
+    simple_rules = RuleSettings.from_preset("simple")
+    party_rules = RuleSettings.from_preset("party")
+
     for name, rect in PRESET_RECTS.items():
         label = {
             "simple": "基本のみ",
-            "standard": "標準",
+            "standard": "標準（編集可）",
             "party": "全部ON",
         }[name]
-        draw_button(screen, rect, label, fonts.small)
+
+        if name == "simple":
+            selected = settings.rules == simple_rules
+        elif name == "standard":
+            selected = settings.rules == settings.standard_rules
+        else:
+            selected = settings.rules == party_rules
+
+        draw_button(
+            screen,
+            rect,
+            label,
+            fonts.small,
+            selected=selected,
+        )
 
     enabled_count = sum(settings.rules.to_dict().values())
+    standard_count = sum(settings.standard_rules.to_dict().values())
     draw_text(
         screen,
-        f"現在ONのローカルルール　{enabled_count} / {len(RULE_INFOS)}",
+        (
+            f"現在ON　{enabled_count} / {len(RULE_INFOS)}　　"
+            f"登録済み標準　{standard_count} / {len(RULE_INFOS)}"
+        ),
         fonts.small,
         LIGHT_BLUE,
         (WINDOW_WIDTH // 2, 622),
@@ -624,9 +647,15 @@ def draw_rules_screen(
 ) -> None:
     screen.fill(DARK_TABLE_COLOR)
     draw_text(screen, "ローカルルール", fonts.heading, WHITE, (WINDOW_WIDTH // 2, 45))
+    current_count = sum(settings.rules.to_dict().values())
+    standard_count = sum(settings.standard_rules.to_dict().values())
     draw_text(
         screen,
-        "クリックしてON／OFFを切り替えます",
+        (
+            "クリックしてON／OFFを切り替えます　　"
+            f"現在 {current_count}/{len(RULE_INFOS)}　"
+            f"登録済み標準 {standard_count}/{len(RULE_INFOS)}"
+        ),
         fonts.small,
         LIGHT_BLUE,
         (WINDOW_WIDTH // 2, 78),
@@ -651,10 +680,41 @@ def draw_rules_screen(
         description = fonts.tiny.render(info.description, True, (221, 231, 226))
         screen.blit(description, (rect.x + 88, rect.y + 40))
 
+    draw_button(
+        screen,
+        RULE_SAVE_STANDARD_RECT,
+        "現在の組み合わせを標準に登録",
+        fonts.small,
+    )
+    draw_button(
+        screen,
+        RULE_RESET_STANDARD_RECT,
+        "標準を初期状態（7個）に戻す",
+        fonts.small,
+    )
+
     draw_button(screen, RULE_BACK_RECT, "設定画面へ戻る", fonts.small)
-    draw_button(screen, RULE_SIMPLE_RECT, "基本のみ", fonts.small)
-    draw_button(screen, RULE_STANDARD_RECT, "標準", fonts.small)
-    draw_button(screen, RULE_ALL_RECT, "全部ON", fonts.small)
+    draw_button(
+        screen,
+        RULE_SIMPLE_RECT,
+        "基本のみ",
+        fonts.small,
+        selected=settings.rules == RuleSettings.from_preset("simple"),
+    )
+    draw_button(
+        screen,
+        RULE_STANDARD_RECT,
+        "登録済み標準",
+        fonts.small,
+        selected=settings.rules == settings.standard_rules,
+    )
+    draw_button(
+        screen,
+        RULE_ALL_RECT,
+        "全部ON",
+        fonts.small,
+        selected=settings.rules == RuleSettings.from_preset("party"),
+    )
 
 
 def draw_help_screen(screen: pygame.Surface, fonts: Fonts) -> None:
@@ -971,7 +1031,7 @@ def main() -> None:
                     elif PRESET_RECTS["simple"].collidepoint(event.pos):
                         editing_settings.rules = RuleSettings.from_preset("simple")
                     elif PRESET_RECTS["standard"].collidepoint(event.pos):
-                        editing_settings.rules = RuleSettings.from_preset("standard")
+                        editing_settings.rules = editing_settings.standard_rules.copy()
                     elif PRESET_RECTS["party"].collidepoint(event.pos):
                         editing_settings.rules = RuleSettings.from_preset("party")
                     elif SETTINGS_RULES_RECT.collidepoint(event.pos):
@@ -1013,10 +1073,17 @@ def main() -> None:
 
                     if RULE_BACK_RECT.collidepoint(event.pos):
                         mode = "settings"
+                    elif RULE_SAVE_STANDARD_RECT.collidepoint(event.pos):
+                        editing_settings.standard_rules = editing_settings.rules.copy()
+                    elif RULE_RESET_STANDARD_RECT.collidepoint(event.pos):
+                        editing_settings.standard_rules = RuleSettings.from_preset(
+                            "standard"
+                        )
+                        editing_settings.rules = editing_settings.standard_rules.copy()
                     elif RULE_SIMPLE_RECT.collidepoint(event.pos):
                         editing_settings.rules = RuleSettings.from_preset("simple")
                     elif RULE_STANDARD_RECT.collidepoint(event.pos):
-                        editing_settings.rules = RuleSettings.from_preset("standard")
+                        editing_settings.rules = editing_settings.standard_rules.copy()
                     elif RULE_ALL_RECT.collidepoint(event.pos):
                         editing_settings.rules = RuleSettings.from_preset("party")
 
