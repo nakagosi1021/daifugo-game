@@ -514,6 +514,12 @@ def clicked_card(position: tuple[int, int], rects: list[pygame.Rect]) -> int | N
     return None
 
 
+def append_input_text(value: str, text: str, limit: int) -> str:
+    if not text:
+        return value
+    return (value + "".join(ch for ch in text if ch.isprintable()))[:limit]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="LAN大富豪クライアント")
     parser.add_argument("--host", default="")
@@ -540,6 +546,12 @@ def main() -> None:
     connecting = False
     hand_rect_cache: list[pygame.Rect] = []
     running = True
+
+    pygame.key.start_text_input()
+    if active_field == "name":
+        pygame.key.set_text_input_rect(CONNECT_NAME_RECT)
+    elif active_field == "host":
+        pygame.key.set_text_input_rect(CONNECT_HOST_RECT)
 
     if args.host and args.name:
         network.connect(args.host, args.port, args.name)
@@ -579,8 +591,10 @@ def main() -> None:
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     if CONNECT_HOST_RECT.collidepoint(event.pos):
                         active_field = "host"
+                        pygame.key.set_text_input_rect(CONNECT_HOST_RECT)
                     elif CONNECT_NAME_RECT.collidepoint(event.pos):
                         active_field = "name"
+                        pygame.key.set_text_input_rect(CONNECT_NAME_RECT)
                     elif CONNECT_BUTTON_RECT.collidepoint(event.pos) and not connecting:
                         if host_value.strip() and name_value.strip():
                             network.connect(host_value.strip(), args.port, name_value.strip())
@@ -589,6 +603,9 @@ def main() -> None:
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_TAB:
                         active_field = "name" if active_field == "host" else "host"
+                        pygame.key.set_text_input_rect(
+                            CONNECT_NAME_RECT if active_field == "name" else CONNECT_HOST_RECT
+                        )
                     elif event.key == pygame.K_RETURN and not connecting:
                         if host_value.strip() and name_value.strip():
                             network.connect(host_value.strip(), args.port, name_value.strip())
@@ -599,11 +616,11 @@ def main() -> None:
                             host_value = host_value[:-1]
                         elif active_field == "name":
                             name_value = name_value[:-1]
-                    elif event.unicode and event.unicode.isprintable():
-                        if active_field == "host" and len(host_value) < 40:
-                            host_value += event.unicode
-                        elif active_field == "name" and len(name_value) < 16:
-                            name_value += event.unicode
+                elif event.type == pygame.TEXTINPUT:
+                    if active_field == "host":
+                        host_value = append_input_text(host_value, event.text, 40)
+                    elif active_field == "name":
+                        name_value = append_input_text(name_value, event.text, 16)
                 continue
 
             if phase == "lobby":
@@ -700,6 +717,7 @@ def main() -> None:
         clock.tick(FPS)
 
     network.close()
+    pygame.key.stop_text_input()
     pygame.quit()
 
 
