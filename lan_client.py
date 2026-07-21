@@ -15,6 +15,7 @@ from card import Card
 from card_art import CardFonts, draw_card_back, draw_card_front
 from lan_common import card_from_dict, card_id
 from lan_protocol import receive_messages, send_message
+from rules import RULE_INFOS
 
 WINDOW_WIDTH = 1180
 WINDOW_HEIGHT = 820
@@ -50,6 +51,8 @@ LOBBY_START_RECT = pygame.Rect(430, 690, 320, 58)
 PLAY_RECT = pygame.Rect(440, 595, 135, 48)
 PASS_RECT = pygame.Rect(600, 595, 135, 48)
 NEXT_ROUND_RECT = pygame.Rect(405, 690, 370, 58)
+RULE_LABELS = {info.key: info.label for info in RULE_INFOS}
+RULE_DISPLAY_ORDER = [info.key for info in RULE_INFOS]
 
 
 @dataclass(slots=True)
@@ -185,10 +188,87 @@ def draw_text_left(
     screen.blit(surface, surface.get_rect(midleft=(left, center_y)))
 
 
+def fit_text(text: str, font: pygame.font.Font, max_width: int) -> str:
+    if font.size(text)[0] <= max_width:
+        return text
+    suffix = "..."
+    result = text
+    while result and font.size(result + suffix)[0] > max_width:
+        result = result[:-1]
+    return result + suffix if result else suffix
+
+
+def wrap_text(text: str, font: pygame.font.Font, max_width: int) -> list[str]:
+    if not text:
+        return [""]
+    lines: list[str] = []
+    current = ""
+    for char in text:
+        if char == "\n":
+            lines.append(current)
+            current = ""
+            continue
+        candidate = current + char
+        if current and font.size(candidate)[0] > max_width:
+            lines.append(current)
+            current = char
+        else:
+            current = candidate
+    if current or not lines:
+        lines.append(current)
+    return lines
+
+
+def draw_text_in_rect(
+    screen: pygame.Surface,
+    text: str,
+    font: pygame.font.Font,
+    color: tuple[int, int, int],
+    rect: pygame.Rect,
+    max_lines: int = 2,
+) -> None:
+    lines = wrap_text(text, font, rect.width)
+    line_height = font.get_linesize()
+    for index, line in enumerate(lines[:max_lines]):
+        if index == max_lines - 1 and len(lines) > max_lines:
+            line = fit_text(line + "...", font, rect.width)
+        surface = font.render(line, True, color)
+        screen.blit(surface, (rect.left, rect.top + index * line_height))
+
+
 def draw_panel(screen: pygame.Surface, rect: pygame.Rect, dark: bool = False) -> None:
     pygame.draw.rect(screen, SHADOW_COLOR, rect.move(5, 6), border_radius=16)
     pygame.draw.rect(screen, PANEL_DARK if dark else PANEL_COLOR, rect, border_radius=16)
     pygame.draw.rect(screen, (220, 244, 232), rect, width=2, border_radius=16)
+
+
+def draw_flat_panel(
+    screen: pygame.Surface,
+    rect: pygame.Rect,
+    color: tuple[int, int, int] = PANEL_COLOR,
+    border: tuple[int, int, int] = (206, 236, 220),
+) -> None:
+    pygame.draw.rect(screen, (10, 47, 34), rect.move(2, 3), border_radius=8)
+    pygame.draw.rect(screen, color, rect, border_radius=8)
+    pygame.draw.rect(screen, border, rect, width=1, border_radius=8)
+
+
+def draw_badge(
+    screen: pygame.Surface,
+    text: str,
+    font: pygame.font.Font,
+    x: int,
+    y: int,
+    fill: tuple[int, int, int],
+    text_color: tuple[int, int, int] = BLACK,
+) -> pygame.Rect:
+    width = font.size(text)[0] + 16
+    rect = pygame.Rect(x, y, width, 24)
+    pygame.draw.rect(screen, fill, rect, border_radius=6)
+    pygame.draw.rect(screen, (24, 58, 42), rect, width=1, border_radius=6)
+    surface = font.render(text, True, text_color)
+    screen.blit(surface, surface.get_rect(center=rect.center))
+    return rect
 
 
 def draw_button(
@@ -302,11 +382,11 @@ def draw_hand(
 
 def opponent_positions() -> list[tuple[int, int, str]]:
     return [
-        (180, 170, "top"),
-        (590, 120, "top"),
-        (1000, 170, "top"),
-        (1030, 395, "right"),
-        (150, 395, "left"),
+        (50, 88, "panel"),
+        (280, 70, "panel"),
+        (670, 70, "panel"),
+        (900, 88, "panel"),
+        (900, 258, "panel"),
     ]
 
 
@@ -335,6 +415,105 @@ def draw_back_fan(
 
 def relative_opponents(seat: int, player_count: int) -> list[int]:
     return [((seat + offset) % player_count) for offset in range(1, player_count)]
+
+
+def enabled_rule_labels(snapshot: dict[str, Any]) -> list[str]:
+    rules = snapshot.get("rules", {})
+    if not isinstance(rules, dict):
+        return []
+    return [
+        RULE_LABELS[key]
+        for key in RULE_DISPLAY_ORDER
+        if bool(rules.get(key)) and key in RULE_LABELS
+    ]
+
+
+def active_effect_labels(game: dict[str, Any]) -> list[str]:
+    labels: list[str] = []
+    if game.get("revolution"):
+        labels.append("革命中")
+    if game.get("eleven_back"):
+        labels.append("11バック中")
+    locked = game.get("locked_suits")
+    if locked:
+        labels.append("縛り:" + "・".join(str(x) for x in locked))
+    pending = game.get("pending_display")
+    if isinstance(pending, dict):
+        effect = pending.get("effect")
+        if effect == "eight_cut":
+            labels.append("8切り発動")
+        elif effect == "spade_three":
+            labels.append("スペード3返し")
+    return labels
+
+
+def draw_rule_panel(
+    screen: pygame.Surface,
+    fonts: Fonts,
+    snapshot: dict[str, Any],
+    game: dict[str, Any],
+) -> None:
+    panel = pygame.Rect(24, 276, 226, 350)
+    draw_flat_panel(screen, panel, color=(21, 82, 55))
+    draw_text_left(screen, "発動中", fonts.info, YELLOW, panel.left + 14, panel.top + 24)
+    effects = active_effect_labels(game)
+    if effects:
+        y = panel.top + 44
+        for label in effects[:4]:
+            badge = draw_badge(screen, label, fonts.tiny, panel.left + 14, y, YELLOW)
+            y = badge.bottom + 6
+    else:
+        draw_text_left(screen, "通常", fonts.small, WHITE, panel.left + 16, panel.top + 55)
+
+    draw_text_left(screen, "有効ルール", fonts.info, LIGHT_BLUE, panel.left + 14, panel.top + 118)
+    labels = enabled_rule_labels(snapshot)
+    if not labels:
+        draw_text_left(screen, "なし", fonts.small, WHITE, panel.left + 16, panel.top + 148)
+        return
+
+    x = panel.left + 14
+    y = panel.top + 138
+    for label in labels:
+        width = fonts.tiny.size(label)[0] + 16
+        if x + width > panel.right - 12:
+            x = panel.left + 14
+            y += 28
+        if y > panel.bottom - 28:
+            draw_text_left(screen, "ほか", fonts.tiny, WHITE, x, y + 12)
+            break
+        rect = draw_badge(screen, label, fonts.tiny, x, y, (221, 244, 232))
+        x = rect.right + 6
+
+
+def draw_opponent_panel(
+    screen: pygame.Surface,
+    fonts: Fonts,
+    name: str,
+    count: int,
+    status: str,
+    rect: pygame.Rect,
+    active: bool,
+) -> None:
+    color = (29, 103, 68) if active else (25, 82, 57)
+    border = YELLOW if active else (192, 226, 210)
+    draw_flat_panel(screen, rect, color=color, border=border)
+    draw_text_left(
+        screen,
+        fit_text(name, fonts.small, rect.width - 22),
+        fonts.small,
+        YELLOW if active else WHITE,
+        rect.left + 10,
+        rect.top + 18,
+    )
+    draw_text_left(
+        screen,
+        status,
+        fonts.tiny,
+        LIGHT_BLUE if active else (225, 238, 230),
+        rect.left + 10,
+        rect.top + 39,
+    )
+    draw_back_fan(screen, (rect.centerx, rect.top + 51), "top", count)
 
 
 def draw_connect(
@@ -419,6 +598,8 @@ def draw_table_cards(screen: pygame.Surface, cards: list[Card], fonts: CardFonts
 
 def draw_game(screen: pygame.Surface, fonts: Fonts, snapshot: dict[str, Any], selected_ids: set[str]) -> list[pygame.Rect]:
     screen.fill(TABLE_COLOR)
+    pygame.draw.rect(screen, DARK_TABLE_COLOR, pygame.Rect(0, 0, WINDOW_WIDTH, 62))
+    pygame.draw.rect(screen, (42, 132, 85), pygame.Rect(0, 62, WINDOW_WIDTH, 5))
     seat = int(snapshot["seat"])
     names = [str(x) for x in snapshot.get("names", [])]
     player_count = int(snapshot.get("player_count", len(names) or 6))
@@ -430,39 +611,47 @@ def draw_game(screen: pygame.Surface, fonts: Fonts, snapshot: dict[str, Any], se
     passed = {int(x) for x in game.get("passed_players", [])}
     rankings = [int(x) for x in game.get("rankings", [])]
 
-    draw_text(screen, f"第{game.get('round_number', 1)}戦　{player_count}人LAN大富豪", fonts.heading, WHITE, (WINDOW_WIDTH // 2, 34))
-    status = []
-    if game.get("revolution"):
-        status.append("革命")
-    if game.get("eleven_back"):
-        status.append("11バック")
-    locked = game.get("locked_suits")
-    if locked:
-        status.append("縛り:" + "・".join(str(x) for x in locked))
-    draw_text(screen, " / ".join(status) if status else "通常", fonts.small, YELLOW if status else WHITE, (160, 35))
+    draw_text(screen, f"第{game.get('round_number', 1)}戦　{player_count}人LAN大富豪", fonts.heading, WHITE, (WINDOW_WIDTH // 2, 31))
+    draw_rule_panel(screen, fonts, snapshot, game)
 
     opponents = relative_opponents(seat, player_count)
-    for opponent, (x, y, orientation) in zip(opponents, opponent_positions()):
+    for opponent, (x, y, _) in zip(opponents, opponent_positions()):
         count = counts[opponent]
-        draw_back_fan(screen, (x, y), orientation, count)
         name = names[opponent] if opponent < len(names) else f"席{opponent + 1}"
         if opponent in rankings:
-            label = f"{name}　{rankings.index(opponent) + 1}位"
-            color = YELLOW
+            status = f"{rankings.index(opponent) + 1}位で上がり"
         elif opponent in passed:
-            label = f"{name}　パス"
-            color = GRAY
+            status = "パス"
         else:
-            label = f"{name}　残り{count}枚"
-            color = LIGHT_BLUE if opponent == current else WHITE
-        label_y = y - 28 if orientation == "top" else y - 60
-        draw_text(screen, label, fonts.small, color, (x, label_y))
+            status = f"残り{count}枚"
+        draw_opponent_panel(
+            screen,
+            fonts,
+            name,
+            count,
+            status,
+            pygame.Rect(x, y, 210, 112),
+            active=opponent == current,
+        )
 
     turn_name = names[current] if 0 <= current < len(names) else "-"
-    draw_text(screen, f"現在の番：{turn_name}", fonts.info, LIGHT_BLUE, (WINDOW_WIDTH // 2, 195))
-    draw_text(screen, str(game.get("table_description", "場：なし")), fonts.info, WHITE, (WINDOW_WIDTH // 2, 255))
+    info_panel = pygame.Rect(270, 205, 640, 52)
+    draw_flat_panel(screen, info_panel, color=(25, 91, 61), border=(211, 237, 223))
+    draw_text(screen, f"現在の番：{fit_text(turn_name, fonts.info, 220)}", fonts.info, LIGHT_BLUE, (info_panel.left + 160, info_panel.centery))
+    draw_text(screen, str(game.get("table_description", "場：なし")), fonts.info, WHITE, (info_panel.right - 165, info_panel.centery))
+
     draw_table_cards(screen, table_cards, fonts.card)
-    draw_text(screen, str(game.get("message", "")), fonts.small, YELLOW, (WINDOW_WIDTH // 2, 455))
+
+    message_panel = pygame.Rect(270, 435, 640, 66)
+    draw_flat_panel(screen, message_panel, color=(20, 75, 51), border=(184, 218, 201))
+    draw_text_in_rect(
+        screen,
+        str(game.get("message", "")),
+        fonts.small,
+        YELLOW,
+        message_panel.inflate(-24, -16),
+        max_lines=2,
+    )
 
     pending = game.get("pending_selection")
     if isinstance(pending, dict) and pending.get("source_player") == seat:
@@ -478,11 +667,17 @@ def draw_game(screen: pygame.Surface, fonts: Fonts, snapshot: dict[str, Any], se
         draw_button(screen, PLAY_RECT, "出す", fonts.button, enabled=human_turn and bool(selected_ids))
         draw_button(screen, PASS_RECT, "パス", fonts.button, enabled=human_turn and bool(table_cards))
 
-    draw_text(screen, selection_text, fonts.small, YELLOW, (WINDOW_WIDTH // 2, 650))
+    your_name = names[seat] if seat < len(names) else "-"
+    bottom_text = f"あなた：{your_name}　残り{len(hand)}枚　{selection_text}"
+    draw_text(
+        screen,
+        fit_text(bottom_text, fonts.small, 760),
+        fonts.small,
+        YELLOW,
+        (WINDOW_WIDTH // 2, 550),
+    )
     bright = bright_card_ids(hand, selected_ids, game, seat)
     rects = draw_hand(screen, hand, selected_ids, bright, fonts.card)
-    your_name = names[seat] if seat < len(names) else "-"
-    draw_text(screen, f"あなた：{your_name}　残り{len(hand)}枚", fonts.info, WHITE, (WINDOW_WIDTH // 2, 695))
     return rects
 
 
