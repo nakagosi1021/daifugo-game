@@ -6,11 +6,17 @@ import socket
 import subprocess
 import sys
 import tkinter as tk
+from tkinter import ttk
 from tkinter import messagebox
+
+from app_settings import DIFFICULTY_LABELS, load_settings, save_settings
+from rules import RULE_INFOS, RuleSettings
 
 
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_PORT = "50000"
+SETTINGS_PATH = APP_DIR / "settings.json"
+DIFFICULTY_BY_LABEL = {label: key for key, label in DIFFICULTY_LABELS.items()}
 
 
 def python_executable(gui: bool = False) -> str:
@@ -58,11 +64,19 @@ class Launcher(tk.Tk):
         self.resizable(False, False)
         self.server_process: subprocess.Popen[bytes] | None = None
         self.client_processes: list[subprocess.Popen[bytes]] = []
+        self.settings = load_settings(SETTINGS_PATH)
 
         self.host_name = tk.StringVar(value="ホスト")
         self.join_name = tk.StringVar()
         self.host_ip = tk.StringVar()
         self.player_count = tk.IntVar(value=6)
+        self.cpu_difficulty = tk.StringVar(
+            value=DIFFICULTY_LABELS.get(self.settings.cpu_difficulty, "ふつう")
+        )
+        self.rule_vars = {
+            info.key: tk.BooleanVar(value=bool(getattr(self.settings.rules, info.key)))
+            for info in RULE_INFOS
+        }
         self.status = tk.StringVar(value="ホストPCは「ホストとして開始」、参加者は「参加する」を押してください。")
 
         self.build_ui()
@@ -100,15 +114,57 @@ class Launcher(tk.Tk):
             width=5,
             state="readonly",
         ).grid(row=1, column=1, sticky="w", padx=8, pady=3)
+        tk.Label(host_box, text="CPU").grid(row=2, column=0, sticky="w")
+        ttk.Combobox(
+            host_box,
+            textvariable=self.cpu_difficulty,
+            values=list(DIFFICULTY_LABELS.values()),
+            width=10,
+            state="readonly",
+        ).grid(row=2, column=1, sticky="w", padx=8, pady=3)
         tk.Button(
             host_box,
             text="ホストとして開始",
             width=24,
             command=self.start_host,
-        ).grid(row=0, column=2, rowspan=2, padx=(12, 0))
+        ).grid(row=0, column=2, rowspan=3, padx=(12, 0))
+
+        rules_box = tk.LabelFrame(root, text="ホスト用ローカルルール", padx=12, pady=10)
+        rules_box.grid(row=3, column=0, columnspan=3, sticky="ew", pady=8)
+        for index, info in enumerate(RULE_INFOS):
+            row = index // 2
+            column = (index % 2) * 2
+            tk.Checkbutton(
+                rules_box,
+                text=info.label,
+                variable=self.rule_vars[info.key],
+                anchor="w",
+            ).grid(row=row, column=column, sticky="w", padx=(0, 18), pady=2)
+
+        preset_row = (len(RULE_INFOS) + 1) // 2
+        tk.Button(
+            rules_box,
+            text="シンプル",
+            command=lambda: self.apply_rule_preset("simple"),
+        ).grid(row=preset_row, column=0, sticky="w", pady=(8, 0))
+        tk.Button(
+            rules_box,
+            text="標準",
+            command=lambda: self.apply_rule_preset("standard"),
+        ).grid(row=preset_row, column=1, sticky="w", pady=(8, 0))
+        tk.Button(
+            rules_box,
+            text="全部ON",
+            command=lambda: self.apply_rule_preset("party"),
+        ).grid(row=preset_row, column=2, sticky="w", pady=(8, 0))
+        tk.Button(
+            rules_box,
+            text="ルール保存",
+            command=self.save_host_settings,
+        ).grid(row=preset_row, column=3, sticky="e", pady=(8, 0))
 
         join_box = tk.LabelFrame(root, text="参加者PCで使う", padx=12, pady=10)
-        join_box.grid(row=3, column=0, columnspan=3, sticky="ew", pady=8)
+        join_box.grid(row=4, column=0, columnspan=3, sticky="ew", pady=8)
         tk.Label(join_box, text="ホストIP").grid(row=0, column=0, sticky="w")
         tk.Entry(join_box, textvariable=self.host_ip, width=24).grid(
             row=0, column=1, padx=8, pady=3
@@ -125,11 +181,29 @@ class Launcher(tk.Tk):
         ).grid(row=0, column=2, rowspan=2, padx=(12, 0))
 
         tk.Button(root, text="サーバー停止", command=self.stop_server).grid(
-            row=4, column=0, sticky="w", pady=(8, 0)
+            row=5, column=0, sticky="w", pady=(8, 0)
         )
         tk.Label(root, textvariable=self.status, fg="#7a4a00", wraplength=560).grid(
-            row=4, column=1, columnspan=2, sticky="w", padx=(12, 0), pady=(8, 0)
+            row=5, column=1, columnspan=2, sticky="w", padx=(12, 0), pady=(8, 0)
         )
+
+    def selected_rules(self) -> RuleSettings:
+        return RuleSettings(
+            **{key: bool(var.get()) for key, var in self.rule_vars.items()}
+        )
+
+    def apply_rule_preset(self, preset: str) -> None:
+        rules = RuleSettings.from_preset(preset)
+        for info in RULE_INFOS:
+            self.rule_vars[info.key].set(bool(getattr(rules, info.key)))
+
+    def save_host_settings(self) -> None:
+        difficulty = DIFFICULTY_BY_LABEL.get(self.cpu_difficulty.get(), "normal")
+        self.settings.rules = self.selected_rules()
+        self.settings.cpu_difficulty = difficulty
+        self.settings.demo_mode = False
+        save_settings(SETTINGS_PATH, self.settings)
+        self.status.set("ホスト用ローカルルールを保存しました。次に開始するLAN対戦で使われます。")
 
     def ensure_server(self) -> None:
         if self.server_process is not None and self.server_process.poll() is None:
@@ -145,6 +219,7 @@ class Launcher(tk.Tk):
         if not name:
             messagebox.showerror("入力不足", "ホストの名前を入力してください。")
             return
+        self.save_host_settings()
         self.ensure_server()
         self.client_processes.append(
             start_process(
