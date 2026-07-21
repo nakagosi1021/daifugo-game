@@ -59,6 +59,16 @@ def port_available(port: int) -> bool:
     return True
 
 
+def test_tcp_connection(host: str, port: int, timeout: float = 3.0) -> tuple[bool, str]:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True, "接続できます。"
+    except TimeoutError:
+        return False, "接続がタイムアウトしました。IP、Wi-Fi、ファイアウォールを確認してください。"
+    except OSError as exc:
+        return False, f"接続できません: {exc}"
+
+
 def start_process(
     args: list[str],
     gui: bool = True,
@@ -203,12 +213,21 @@ class Launcher(tk.Tk):
             width=24,
             command=self.join_game,
         ).grid(row=0, column=2, rowspan=2, padx=(12, 0))
+        tk.Button(
+            join_box,
+            text="接続テスト",
+            width=24,
+            command=self.test_join_connection,
+        ).grid(row=2, column=2, padx=(12, 0), pady=(8, 0))
 
         tk.Button(root, text="サーバー停止", command=self.stop_server).grid(
             row=5, column=0, sticky="w", pady=(8, 0)
         )
+        tk.Button(root, text="ファイアウォール許可", command=self.allow_firewall).grid(
+            row=5, column=1, sticky="w", pady=(8, 0), padx=(12, 0)
+        )
         tk.Label(root, textvariable=self.status, fg="#7a4a00", wraplength=560).grid(
-            row=5, column=1, columnspan=2, sticky="w", padx=(12, 0), pady=(8, 0)
+            row=6, column=0, columnspan=3, sticky="w", pady=(8, 0)
         )
 
     def selected_rules(self) -> RuleSettings:
@@ -293,6 +312,43 @@ class Launcher(tk.Tk):
             )
         )
         self.status.set("参加用ゲーム画面を起動しました。")
+
+    def test_join_connection(self) -> None:
+        host = self.host_ip.get().strip()
+        if not host:
+            messagebox.showerror("入力不足", "ホストIPを入力してください。")
+            return
+        ok, message = test_tcp_connection(host, int(DEFAULT_PORT))
+        self.status.set(message)
+        if ok:
+            messagebox.showinfo("接続テスト", message)
+        else:
+            messagebox.showerror("接続テスト", message)
+
+    def allow_firewall(self) -> None:
+        command = (
+            "netsh advfirewall firewall add rule "
+            'name="Daifugo LAN TCP 50000" '
+            "dir=in action=allow protocol=TCP localport=50000 profile=any"
+        )
+        if os.name != "nt":
+            messagebox.showinfo("ファイアウォール許可", "Windows用の操作です。")
+            return
+        try:
+            subprocess.Popen(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    f"Start-Process -Verb RunAs -FilePath netsh -ArgumentList '{command[len('netsh '):]}'",
+                ],
+                cwd=APP_DIR,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except OSError as exc:
+            messagebox.showerror("ファイアウォール許可", f"起動できませんでした: {exc}")
+            return
+        self.status.set("管理者確認が出たら許可してください。50000番ポートの受信を許可します。")
 
     def stop_server(self) -> None:
         if self.server_process is None or self.server_process.poll() is not None:
