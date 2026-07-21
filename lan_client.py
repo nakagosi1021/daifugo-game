@@ -531,7 +531,7 @@ def main() -> None:
     clock = pygame.time.Clock()
     network = NetworkClient()
 
-    host_value = args.host or "127.0.0.1"
+    host_value = args.host or ""
     name_value = args.name or ""
     active_field: str | None = "name" if not args.name else None
     status = ""
