@@ -1,0 +1,193 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import socket
+import subprocess
+import sys
+import tkinter as tk
+from tkinter import messagebox
+
+
+APP_DIR = Path(__file__).resolve().parent
+DEFAULT_PORT = "50000"
+
+
+def python_executable(gui: bool = False) -> str:
+    name = "pythonw.exe" if gui else "python.exe"
+    venv_python = APP_DIR / ".venv" / "Scripts" / name
+    if venv_python.exists():
+        return str(venv_python)
+
+    if gui and sys.executable.lower().endswith("python.exe"):
+        pythonw = Path(sys.executable).with_name("pythonw.exe")
+        if pythonw.exists():
+            return str(pythonw)
+
+    return sys.executable
+
+
+def local_ipv4_addresses() -> list[str]:
+    addresses: set[str] = set()
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            address = info[4][0]
+            if not address.startswith("127."):
+                addresses.add(address)
+    except OSError:
+        pass
+    return sorted(addresses)
+
+
+def start_process(args: list[str], gui: bool = True) -> subprocess.Popen[bytes]:
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+    return subprocess.Popen(
+        [python_executable(gui=gui), *args],
+        cwd=APP_DIR,
+        creationflags=creationflags,
+    )
+
+
+class Launcher(tk.Tk):
+    def __init__(self) -> None:
+        super().__init__()
+        self.title("LAN大富豪ランチャー")
+        self.resizable(False, False)
+        self.server_process: subprocess.Popen[bytes] | None = None
+        self.client_processes: list[subprocess.Popen[bytes]] = []
+
+        self.host_name = tk.StringVar(value="ホスト")
+        self.join_name = tk.StringVar()
+        self.host_ip = tk.StringVar()
+        self.player_count = tk.IntVar(value=6)
+        self.status = tk.StringVar(value="ホストPCは「ホストとして開始」、参加者は「参加する」を押してください。")
+
+        self.build_ui()
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def build_ui(self) -> None:
+        root = tk.Frame(self, padx=18, pady=16)
+        root.grid(row=0, column=0)
+
+        tk.Label(root, text="LAN大富豪", font=("", 18, "bold")).grid(
+            row=0, column=0, columnspan=3, pady=(0, 12)
+        )
+
+        ips = local_ipv4_addresses()
+        ip_text = "\n".join(ips) if ips else "見つかりません。ipconfigで確認してください。"
+        tk.Label(root, text="ホストPCの接続用IP:", anchor="w").grid(
+            row=1, column=0, sticky="w"
+        )
+        tk.Label(root, text=ip_text, fg="#0b5cad", justify="left").grid(
+            row=1, column=1, columnspan=2, sticky="w"
+        )
+
+        host_box = tk.LabelFrame(root, text="ホストPCで使う", padx=12, pady=10)
+        host_box.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(14, 8))
+        tk.Label(host_box, text="名前").grid(row=0, column=0, sticky="w")
+        tk.Entry(host_box, textvariable=self.host_name, width=24).grid(
+            row=0, column=1, padx=8, pady=3
+        )
+        tk.Label(host_box, text="人数").grid(row=1, column=0, sticky="w")
+        tk.Spinbox(
+            host_box,
+            from_=2,
+            to=6,
+            textvariable=self.player_count,
+            width=5,
+            state="readonly",
+        ).grid(row=1, column=1, sticky="w", padx=8, pady=3)
+        tk.Button(
+            host_box,
+            text="ホストとして開始",
+            width=24,
+            command=self.start_host,
+        ).grid(row=0, column=2, rowspan=2, padx=(12, 0))
+
+        join_box = tk.LabelFrame(root, text="参加者PCで使う", padx=12, pady=10)
+        join_box.grid(row=3, column=0, columnspan=3, sticky="ew", pady=8)
+        tk.Label(join_box, text="ホストIP").grid(row=0, column=0, sticky="w")
+        tk.Entry(join_box, textvariable=self.host_ip, width=24).grid(
+            row=0, column=1, padx=8, pady=3
+        )
+        tk.Label(join_box, text="名前").grid(row=1, column=0, sticky="w")
+        tk.Entry(join_box, textvariable=self.join_name, width=24).grid(
+            row=1, column=1, padx=8, pady=3
+        )
+        tk.Button(
+            join_box,
+            text="参加する",
+            width=24,
+            command=self.join_game,
+        ).grid(row=0, column=2, rowspan=2, padx=(12, 0))
+
+        tk.Button(root, text="サーバー停止", command=self.stop_server).grid(
+            row=4, column=0, sticky="w", pady=(8, 0)
+        )
+        tk.Label(root, textvariable=self.status, fg="#7a4a00", wraplength=560).grid(
+            row=4, column=1, columnspan=2, sticky="w", padx=(12, 0), pady=(8, 0)
+        )
+
+    def ensure_server(self) -> None:
+        if self.server_process is not None and self.server_process.poll() is None:
+            return
+        players = str(max(2, min(6, int(self.player_count.get()))))
+        self.server_process = start_process(
+            ["lan_server.py", "--players", players],
+            gui=True,
+        )
+
+    def start_host(self) -> None:
+        name = self.host_name.get().strip()
+        if not name:
+            messagebox.showerror("入力不足", "ホストの名前を入力してください。")
+            return
+        self.ensure_server()
+        self.client_processes.append(
+            start_process(
+                ["lan_client.py", "--host", "127.0.0.1", "--name", name],
+                gui=True,
+            )
+        )
+        self.status.set("サーバーとホスト用ゲーム画面を起動しました。このランチャーは閉じずに置いてください。")
+
+    def join_game(self) -> None:
+        host = self.host_ip.get().strip()
+        name = self.join_name.get().strip()
+        if not host or not name:
+            messagebox.showerror("入力不足", "ホストIPと名前を入力してください。")
+            return
+        self.client_processes.append(
+            start_process(
+                ["lan_client.py", "--host", host, "--name", name],
+                gui=True,
+            )
+        )
+        self.status.set("参加用ゲーム画面を起動しました。")
+
+    def stop_server(self) -> None:
+        if self.server_process is None or self.server_process.poll() is not None:
+            self.status.set("起動中のサーバーはありません。")
+            return
+        self.server_process.terminate()
+        self.server_process = None
+        self.status.set("サーバーを停止しました。")
+
+    def on_close(self) -> None:
+        if self.server_process is not None and self.server_process.poll() is None:
+            answer = messagebox.askyesnocancel(
+                "終了確認",
+                "サーバーが起動中です。サーバーも停止して閉じますか？",
+            )
+            if answer is None:
+                return
+            if answer:
+                self.stop_server()
+        self.destroy()
+
+
+if __name__ == "__main__":
+    Launcher().mainloop()

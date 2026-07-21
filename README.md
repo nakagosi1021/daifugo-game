@@ -66,6 +66,14 @@ python main.py
 
 詳しい使い方は `README_LAN.md` を見てください。
 
+一番簡単な起動方法:
+
+```text
+start_daifugo.bat をダブルクリック
+```
+
+開いたランチャーで、ホストPCは「ホストとして開始」、参加者PCは「参加する」を押してください。
+
 ホストPC:
 
 ```powershell
