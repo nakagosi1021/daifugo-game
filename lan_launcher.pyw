@@ -16,6 +16,8 @@ from rules import RULE_INFOS, RuleSettings
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_PORT = "50000"
 SETTINGS_PATH = APP_DIR / "settings.json"
+SERVER_OUT_LOG = APP_DIR / "lan_server.out.log"
+SERVER_ERR_LOG = APP_DIR / "lan_server.err.log"
 DIFFICULTY_BY_LABEL = {label: key for key, label in DIFFICULTY_LABELS.items()}
 
 
@@ -46,14 +48,36 @@ def local_ipv4_addresses() -> list[str]:
     return sorted(addresses)
 
 
-def start_process(args: list[str], gui: bool = True) -> subprocess.Popen[bytes]:
+def port_available(port: int) -> bool:
+    test_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        test_socket.bind(("0.0.0.0", port))
+    except OSError:
+        return False
+    finally:
+        test_socket.close()
+    return True
+
+
+def start_process(
+    args: list[str],
+    gui: bool = True,
+    log_stdout: Path | None = None,
+    log_stderr: Path | None = None,
+) -> subprocess.Popen[bytes]:
     creationflags = 0
     if os.name == "nt":
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+        if not gui:
+            creationflags |= subprocess.CREATE_NO_WINDOW
+    stdout = open(log_stdout, "a", encoding="utf-8") if log_stdout is not None else None
+    stderr = open(log_stderr, "a", encoding="utf-8") if log_stderr is not None else None
     return subprocess.Popen(
         [python_executable(gui=gui), *args],
         cwd=APP_DIR,
         creationflags=creationflags,
+        stdout=stdout,
+        stderr=stderr,
     )
 
 
@@ -208,11 +232,38 @@ class Launcher(tk.Tk):
     def ensure_server(self) -> None:
         if self.server_process is not None and self.server_process.poll() is None:
             return
+        if not port_available(int(DEFAULT_PORT)):
+            self.status.set("サーバーは既に起動しているようです。そのまま参加できます。")
+            return
+        try:
+            SERVER_OUT_LOG.write_text("", encoding="utf-8")
+            SERVER_ERR_LOG.write_text("", encoding="utf-8")
+        except OSError:
+            pass
         players = str(max(2, min(6, int(self.player_count.get()))))
         self.server_process = start_process(
             ["lan_server.py", "--players", players],
-            gui=True,
+            gui=False,
+            log_stdout=SERVER_OUT_LOG,
+            log_stderr=SERVER_ERR_LOG,
         )
+        self.after(800, self.check_server_started)
+
+    def check_server_started(self) -> None:
+        if self.server_process is None:
+            return
+        if self.server_process.poll() is None:
+            self.status.set("サーバーを起動しました。参加者に接続用IPを伝えてください。")
+            return
+        message = "サーバー起動に失敗しました。"
+        try:
+            error_text = SERVER_ERR_LOG.read_text(encoding="utf-8").strip()
+        except OSError:
+            error_text = ""
+        if error_text:
+            message += f" {error_text.splitlines()[-1]}"
+        self.status.set(message)
+        messagebox.showerror("サーバー起動失敗", message)
 
     def start_host(self) -> None:
         name = self.host_name.get().strip()
