@@ -8,7 +8,7 @@ from card import Card, RANKS, SUITS, card_sort_key
 from deck import Deck
 from rules import RuleSettings
 
-PLAYER_NAMES: tuple[str, ...] = ("あなた", "CPU1", "CPU2", "CPU3")
+PLAYER_NAMES: tuple[str, ...] = ("あなた", "CPU1", "CPU2", "CPU3", "CPU4", "CPU5")
 RANK_TITLES: tuple[str, ...] = ("大富豪", "富豪", "貧民", "大貧民")
 CPU_DIFFICULTIES: tuple[str, ...] = ("easy", "normal", "hard")
 
@@ -21,7 +21,11 @@ def rank_titles_for(player_count: int) -> tuple[str, ...]:
         return ("大富豪", "平民", "大貧民")
     if player_count == 4:
         return RANK_TITLES
-    raise ValueError("参加人数は2〜4人にしてください。")
+    if player_count == 5:
+        return ("大富豪", "富豪", "平民", "貧民", "大貧民")
+    if player_count == 6:
+        return ("大富豪", "富豪", "平民", "平民", "貧民", "大貧民")
+    raise ValueError("参加人数は2〜6人にしてください。")
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,12 +96,17 @@ class GameSession:
     demo_mode: bool = False
     round_number: int = 1
     previous_rankings: list[int] | None = None
+    human_players: set[int] = field(default_factory=lambda: {0})
 
     def __post_init__(self) -> None:
-        if self.player_count not in (2, 3, 4):
-            raise ValueError("参加人数は2〜4人にしてください。")
+        if self.player_count not in (2, 3, 4, 5, 6):
+            raise ValueError("参加人数は2〜6人にしてください。")
         if self.cpu_difficulty not in CPU_DIFFICULTIES:
             raise ValueError("CPU難易度が不正です。")
+        self.human_players = {
+            index for index in self.human_players
+            if 0 <= index < self.player_count
+        }
 
     def reset(self, rules: RuleSettings | None = None) -> None:
         if rules is not None:
@@ -374,7 +383,7 @@ def apply_automatic_exchange(
     """参加人数に応じて階級カード交換を自動処理する。"""
     player_count = len(previous_rankings)
 
-    if player_count not in (2, 3, 4):
+    if player_count not in (2, 3, 4, 5, 6):
         return []
 
     messages: list[str] = []
@@ -388,9 +397,9 @@ def apply_automatic_exchange(
     _transfer_cards(hands, richest, poorest, rich_to_poor)
     messages.append(f"大富豪と大貧民が{exchange_count}枚交換")
 
-    if player_count == 4:
+    if player_count >= 4:
         fugo = previous_rankings[1]
-        hinmin = previous_rankings[2]
+        hinmin = previous_rankings[-2]
         poor_to_rich = _strongest_cards(hands[hinmin], 1)
         rich_to_poor = _weakest_cards(hands[fugo], 1)
         _transfer_cards(hands, hinmin, fugo, poor_to_rich)
@@ -517,7 +526,37 @@ def create_game(session: GameSession, now_ms: int = 0) -> GameState:
     else:
         deck = Deck(include_joker=session.rules.joker)
         deck.shuffle()
-        hands = deck.deal(session.player_count)
+
+        if session.player_count == 6:
+            # 53枚（ジョーカーあり）をそのまま配ると人数によって手札差が出るため、
+            # 6人LAN対戦では各8枚を配り、残りは伏せ札として使用しない。
+            dealt_cards = deck.cards[:48]
+            reserve_cards = deck.cards[48:]
+
+            diamond_three = next(
+                (
+                    card
+                    for card in reserve_cards
+                    if not card.is_joker
+                    and card.suit == "♦"
+                    and card.rank == "3"
+                ),
+                None,
+            )
+            if diamond_three is not None:
+                # 開始札の♦3が伏せ札に入った場合だけ、配札末尾と交換する。
+                swap_card = dealt_cards[-1]
+                dealt_cards[-1] = diamond_three
+                reserve_cards[reserve_cards.index(diamond_three)] = swap_card
+
+            hands = [[] for _ in range(session.player_count)]
+            for index, card in enumerate(dealt_cards):
+                hands[index % session.player_count].append(card)
+            for hand in hands:
+                hand.sort(key=card_sort_key)
+            deck.cards.clear()
+        else:
+            hands = deck.deal(session.player_count)
 
     exchange_messages: list[str] = []
     if (
@@ -698,7 +737,7 @@ def _start_next_pending_effect(state: GameState) -> None:
                 )
                 state.selected_indices.clear()
                 state.message = state.pending_selection.prompt
-                if player != 0:
+                if player not in state.session.human_players:
                     auto_resolve_pending_selection(state)
                 return
 
@@ -714,20 +753,24 @@ def _start_next_pending_effect(state: GameState) -> None:
                 )
                 state.selected_indices.clear()
                 state.message = state.pending_selection.prompt
-                if player != 0:
+                if player not in state.session.human_players:
                     auto_resolve_pending_selection(state)
                 return
 
     _finalize_post_play(state)
 
 
-def confirm_pending_selection(state: GameState, indices: set[int]) -> tuple[bool, str]:
+def confirm_pending_selection(
+    state: GameState,
+    indices: set[int],
+    player_index: int = 0,
+) -> tuple[bool, str]:
     pending = state.pending_selection
     context = state.pending_post_play
     if pending is None or context is None:
         return False, "選択処理はありません"
-    if pending.source_player != 0:
-        return False, "CPUの処理中です"
+    if pending.source_player != player_index:
+        return False, "この選択を行うプレイヤーではありません"
     if len(indices) != pending.count:
         return False, f"カードを{pending.count}枚選択してください"
 
@@ -1206,7 +1249,7 @@ def choose_cpu_play(state: GameState, player_index: int) -> list[Card]:
 
 
 def process_cpu_turn(state: GameState) -> None:
-    if state.current_player == 0 or state.game_over:
+    if state.current_player in state.session.human_players or state.game_over:
         return
     cards = choose_cpu_play(state, state.current_player)
     if cards:
